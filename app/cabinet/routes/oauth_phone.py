@@ -137,46 +137,82 @@ _PAGE = r"""<!doctype html>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Вход по номеру телефона</title>
 <style>
- *{box-sizing:border-box} body{margin:0;min-height:100vh;display:flex;align-items:center;
-   justify-content:center;background:#0b0f17;color:#e6e9ef;
+ *{box-sizing:border-box}
+ body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;
+   background:#0b0f17;color:#e6e9ef;padding:16px;
    font:16px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif}
  .card{width:100%;max-width:380px;padding:28px;background:#131926;border-radius:16px}
  h1{margin:0 0 6px;font-size:20px} p{margin:0 0 20px;color:#8b93a7;font-size:14px}
- input{width:100%;padding:14px;font-size:18px;border-radius:10px;border:1px solid #2a3346;
-   background:#0e1420;color:#fff;letter-spacing:.5px}
+ .field{display:flex;align-items:center;gap:8px;padding:0 14px;border-radius:10px;
+   border:1px solid #2a3346;background:#0e1420}
+ .field:focus-within{border-color:#2563eb}
+ .cc{color:#8b93a7;font-size:18px}
+ input{flex:1;padding:14px 0;font-size:18px;border:0;background:transparent;color:#fff;
+   letter-spacing:.5px;outline:none;min-width:0}
  button{width:100%;margin-top:12px;padding:14px;font-size:16px;font-weight:600;border:0;
    border-radius:10px;background:#2563eb;color:#fff;cursor:pointer}
  button:disabled{opacity:.5;cursor:default}
- .dial{font-size:26px;font-weight:700;letter-spacing:1px;text-align:center;margin:8px 0 4px}
- .hint{text-align:center;color:#8b93a7;font-size:14px}
- .timer{text-align:center;font-size:15px;color:#f59e0b;margin-top:10px}
+ .back{display:block;width:100%;margin-top:10px;padding:12px;text-align:center;
+   background:transparent;border:0;color:#8b93a7;font-size:14px;cursor:pointer}
+ .dial{font-size:28px;font-weight:700;letter-spacing:1px;text-align:center;margin:10px 0 4px}
+ a.call{display:block;text-align:center;margin-top:14px;padding:14px;border-radius:10px;
+   background:#16a34a;color:#fff;text-decoration:none;font-weight:600}
+ .status{text-align:center;color:#8b93a7;font-size:14px;margin-top:12px;min-height:20px}
  .err{color:#f87171;font-size:14px;margin-top:10px;min-height:20px}
- a.call{display:block;text-align:center;margin-top:14px;color:#60a5fa;text-decoration:none}
  .hidden{display:none}
 </style></head><body>
 <div class="card">
   <div id="step1">
     <h1>Вход по номеру</h1>
-    <p>Введите номер телефона — мы покажем, куда позвонить. Звонок бесплатный, отвечать не нужно.</p>
-    <input id="phone" type="tel" inputmode="tel" placeholder="+7 999 123-45-67" autocomplete="tel">
+    <p>Введите номер — покажем, куда позвонить. Звонок бесплатный, отвечать не нужно.</p>
+    <div class="field"><span class="cc">+7</span>
+      <input id="phone" type="tel" inputmode="numeric" placeholder="999 123-45-67"
+             autocomplete="tel-national" maxlength="13"></div>
     <button id="go">Продолжить</button>
+    <button class="back" id="back1">← Другой способ входа</button>
     <div class="err" id="err1"></div>
   </div>
 
   <div id="step2" class="hidden">
-    <h1>Позвоните на номер</h1>
-    <p>Звонок сбросится сам — просто дождитесь соединения.</p>
+    <h1>Позвоните на этот номер</h1>
+    <p>Звонок сбросится сам. Вернитесь на эту страницу — вход произойдёт автоматически.</p>
     <div class="dial" id="dial"></div>
     <a class="call" id="calllink" href="#">Позвонить</a>
-    <div class="timer" id="timer"></div>
-    <div class="hint" id="wait">Ждём звонок…</div>
+    <div class="status" id="status">Ждём звонок…</div>
+    <button class="back" id="back2">← Другой способ входа</button>
     <div class="err" id="err2"></div>
   </div>
 </div>
 <script>
-const qs = new URLSearchParams(location.search);
-const state = qs.get('state') || '';
-let sessionId = null, timer = null;
+const state = new URLSearchParams(location.search).get('state') || '';
+let sessionId = null, polling = false, deadline = 0, stopped = false, hardStop = 0;
+
+// Полная перезагрузка, а не history.back(): кабинет — SPA, и при возврате «назад»
+// у него остаётся крутящийся спиннер на кнопке провайдера.
+function leave() { location.href = '/login'; }
+document.getElementById('back1').onclick = leave;
+document.getElementById('back2').onclick = leave;
+
+// Ввод: только цифры, +7 нарисован отдельно, разбивка 999 123-45-67.
+const input = document.getElementById('phone');
+function format(digits) {
+  const d = digits.slice(0, 10);
+  let out = d.slice(0, 3);
+  if (d.length > 3) out += ' ' + d.slice(3, 6);
+  if (d.length > 6) out += '-' + d.slice(6, 8);
+  if (d.length > 8) out += '-' + d.slice(8, 10);
+  return out;
+}
+input.addEventListener('input', () => {
+  let d = input.value.replace(/\D/g, '');
+  // Вставленный из буфера номер может начинаться с 7 или 8 — это код страны.
+  if (d.length === 11 && (d[0] === '7' || d[0] === '8')) d = d.slice(1);
+  input.value = format(d);
+});
+input.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') document.getElementById('go').click();
+});
+input.focus();
 
 async function post(url, body) {
   const r = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'},
@@ -185,54 +221,85 @@ async function post(url, body) {
 }
 
 document.getElementById('go').onclick = async () => {
-  const btn = document.getElementById('go'); const err = document.getElementById('err1');
-  err.textContent = ''; btn.disabled = true;
-  const {status, data} = await post('/api/cabinet/auth/phone/call',
-                                    {phone: document.getElementById('phone').value});
+  const btn = document.getElementById('go'), err = document.getElementById('err1');
+  const digits = input.value.replace(/\D/g, '');
+  err.textContent = '';
+  if (digits.length !== 10) { err.textContent = 'Введите 10 цифр номера'; return; }
+
+  btn.disabled = true;
+  const {status, data} = await post('/api/cabinet/auth/phone/call', {phone: '+7' + digits});
   btn.disabled = false;
   if (status !== 200) { err.textContent = data.detail || 'Не удалось начать проверку'; return; }
 
   sessionId = data.session_id;
+  deadline = Date.now() + data.expires_in * 1000;
+  // Предохранитель: если провайдер по какой-то причине никогда не отдаст EXPIRED,
+  // оставленная открытой вкладка не должна опрашивать нас вечно.
+  hardStop = Date.now() + 10 * 60 * 1000;
   document.getElementById('dial').textContent = data.dial_number;
-  document.getElementById('calllink').href = 'tel:' + data.dial_number.replace(/[^+\d]/g,'');
+  document.getElementById('calllink').href = 'tel:' + data.dial_number.replace(/[^+\d]/g, '');
   document.getElementById('step1').classList.add('hidden');
   document.getElementById('step2').classList.remove('hidden');
-  startCountdown(data.expires_in);
+  tick();
   poll();
 };
 
-function startCountdown(seconds) {
-  const el = document.getElementById('timer');
-  let left = seconds;
-  timer = setInterval(() => {
-    left--; el.textContent = left > 0 ? 'Осталось ' + left + ' сек' : '';
-    if (left <= 0) {
-      clearInterval(timer);
-      document.getElementById('wait').textContent = '';
-      document.getElementById('err2').textContent = 'Время истекло. Обновите страницу и попробуйте снова.';
-    }
-  }, 1000);
+function tick() {
+  if (stopped) return;
+  const left = Math.max(0, Math.round((deadline - Date.now()) / 1000));
+  const el = document.getElementById('status');
+  el.textContent = left > 0 ? 'Ждём звонок… ' + left + ' сек' : 'Проверяем звонок…';
+  setTimeout(tick, 1000);
 }
 
+// Ключевое: мобильный браузер замораживает таймеры, пока пользователь в звонилке.
+// Поэтому опрашиваем ещё и при возврате на страницу — иначе подтверждённый звонок
+// остаётся незамеченным, а деньги за него уже списаны.
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && sessionId && !stopped) poll();
+});
+
 async function poll() {
-  // Опрос каждые 2 секунды: окно всего минута, чаще незачем, реже — потеряем время.
-  const {status, data} = await post('/api/cabinet/auth/oauth/phone/exchange', {session_id: sessionId, state});
-  if (status === 200 && data.code) {
-    clearInterval(timer);
-    // Относительный путь: страница и кабинет на одном origin.
-    location.href = '/auth/oauth/callback?code=' + encodeURIComponent(data.code) +
-                    '&state=' + encodeURIComponent(state);
+  if (polling || stopped || !sessionId) return;
+  polling = true;
+  try {
+    const {status, data} = await post('/api/cabinet/auth/oauth/phone/exchange',
+                                      {session_id: sessionId, state});
+    if (status === 200 && data.code) {
+      stopped = true;
+      document.getElementById('status').textContent = 'Готово, входим…';
+      location.href = '/auth/oauth/callback?code=' + encodeURIComponent(data.code) +
+                      '&state=' + encodeURIComponent(state);
+      return;
+    }
+    if (status === 410) {  // провайдер сказал EXPIRED — это окончательно
+      stopped = true;
+      document.getElementById('status').textContent = '';
+      document.getElementById('err2').textContent = data.detail || 'Время ожидания истекло';
+      return;
+    }
+    if (status === 400) {
+      stopped = true;
+      document.getElementById('status').textContent = '';
+      document.getElementById('err2').textContent = data.detail || 'Проверка не удалась';
+      return;
+    }
+  } finally {
+    polling = false;
+  }
+  // Опрашиваем раз в секунду и продолжаем после нуля на таймере: подтверждение
+  // могло прийти на самой границе, а CONFIRMED провайдер отдаёт и после окна.
+  // Останавливаемся только по его вердикту — или по предохранителю.
+  if (Date.now() > hardStop) {
+    stopped = true;
+    document.getElementById('status').textContent = '';
+    document.getElementById('err2').textContent = 'Проверка не завершилась. Обновите страницу.';
     return;
   }
-  if (status === 410 || status === 400) {
-    clearInterval(timer);
-    document.getElementById('wait').textContent = '';
-    document.getElementById('err2').textContent = data.detail || 'Проверка не удалась';
-    return;
-  }
-  setTimeout(poll, 2000);
+  setTimeout(poll, 1000);
 }
-</script></body></html>"""
+</script></body></html>
+"""
 
 
 @router.get('/page', response_class=HTMLResponse)
