@@ -1193,7 +1193,7 @@ async def register_email(
             required_vars=['code'],
         )
         custom_subject, custom_body = override or (None, None)
-        await asyncio.to_thread(
+        sent = await asyncio.to_thread(
             email_service.send_email_change_code,
             to_email=email_lower,
             code=merge_code,
@@ -1202,6 +1202,20 @@ async def register_email(
             custom_subject=custom_subject,
             custom_body_html=custom_body,
         )
+        # Отправка возвращает False молча, и раньше пользователю всё равно
+        # говорили «код отправлен». Он ждал письма, которого не было: адрес мог
+        # оказаться в списке недоступных у провайдера рассылки. Об этом надо
+        # сказать прямо — код без письма бесполезен.
+        if not sent:
+            logger.error(
+                'Email register conflict: merge code could not be delivered',
+                current_user_id=user.id,
+                existing_user_id=existing_email_user.id,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail='Не удалось отправить письмо с кодом на этот адрес. Проверьте адрес или попробуйте позже.',
+            )
         logger.info(
             'Email register conflict: merge confirmation code sent to existing account',
             current_user_id=user.id,
@@ -1256,7 +1270,7 @@ async def register_email(
             )
             custom_subject, custom_body = override or (None, None)
 
-            await asyncio.to_thread(
+            sent = await asyncio.to_thread(
                 email_service.send_verification_email,
                 to_email=request.email,
                 verification_token=verification_token,
@@ -1266,6 +1280,18 @@ async def register_email(
                 custom_subject=custom_subject,
                 custom_body_html=custom_body,
             )
+            # Почта уже записана в аккаунт и ждёт подтверждения — откатывать
+            # нечего, но молчать о недоставленном письме нельзя: пользователь
+            # будет ждать его вечно. Повторную отправку даёт /email/resend.
+            if not sent:
+                logger.error(
+                    'Verification email could not be delivered',
+                    user_id=user.id,
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail='Адрес сохранён, но письмо отправить не удалось. Проверьте адрес и запросите письмо ещё раз.',
+                )
 
     return {
         'message': 'Email linked successfully'
