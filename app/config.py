@@ -1290,6 +1290,16 @@ class Settings(BaseSettings):
     CABINET_PASSWORD_RESET_EXPIRE_HOURS: int = 1
     CABINET_EMAIL_CHANGE_CODE_EXPIRE_MINUTES: int = 15  # Email change verification code expiration
     CABINET_EMAIL_AUTH_ENABLED: bool = True  # Enable email registration/login in cabinet
+
+    # Phone authentication: the user dials our number, the provider reports the
+    # caller ID. Deliberately NOT rendered into .env by the deploy role — values
+    # set in the environment become read-only in the admin cabinet, and these are
+    # meant to be switched by an operator without a deploy (same as payment methods).
+    PHONE_AUTH_ENABLED: bool = False  # shows the phone button on the cabinet login page
+    PHONE_AUTH_PROVIDER: str = 'flashcall_ru'  # which adapter serves the calls
+    PHONE_AUTH_API_KEY: str = ''  # masked in the settings API by the TOKEN/KEY heuristic
+    PHONE_AUTH_RATE_LIMIT_PER_HOUR: int = 5  # per number; per IP is x3, global is fixed
+    PHONE_AUTH_ALLOWED_COUNTRY_CODES: str = '7'  # Russian numbers only
     # Согласие с офертой и политикой при ПЕРВОЙ авторизации в кабинете (для новых юзеров).
     # False — чекбоксы не показываются и ничего не требуется (прежнее поведение).
     # Гейт сам собой отключается, если ни оферта, ни политика не включены для веба:
@@ -3812,6 +3822,18 @@ class Settings(BaseSettings):
                 'client_secret': self.OAUTH_VK_CLIENT_SECRET,
                 'enabled': self.OAUTH_VK_ENABLED,
                 'display_name': 'VK',
+            },
+            # Not an OAuth provider: phone login reuses this list so the cabinet
+            # renders its button without any frontend change (the login page
+            # builds buttons from whatever this endpoint returns). The actual
+            # flow is served by our own routes, see cabinet/routes/oauth_phone.py.
+            # No client_id/secret — the provider key lives in PHONE_AUTH_API_KEY
+            # and is configured in the admin panel, like a payment method.
+            'phone': {
+                'client_id': '',
+                'client_secret': '',
+                'enabled': self.PHONE_AUTH_ENABLED,
+                'display_name': '📞 Телефон',
             },
         }
 

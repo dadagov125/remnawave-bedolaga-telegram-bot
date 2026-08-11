@@ -46,6 +46,7 @@ from .admin_users import router as admin_users_router
 from .admin_wheel import router as admin_wheel_router
 from .admin_withdrawals import router as admin_withdrawals_router
 from .auth import router as auth_router
+from .auth_phone import router as auth_phone_router
 from .balance import router as balance_router
 from .branding import router as branding_router
 from .contests import router as contests_router
@@ -58,6 +59,7 @@ from .media import router as media_router
 from .news import router as news_router
 from .notifications import router as notifications_router
 from .oauth import router as oauth_router
+from .oauth_phone import router as oauth_phone_router
 from .partner_application import router as partner_application_router
 from .polls import router as polls_router
 from .promo import router as promo_router
@@ -87,6 +89,8 @@ router.include_router(site_verification_router)
 
 # Include all sub-routers
 router.include_router(auth_router)
+router.include_router(auth_phone_router)
+router.include_router(oauth_phone_router)  # раньше oauth_router: literal path бьёт параметризованный
 router.include_router(oauth_router)
 router.include_router(account_linking_router)
 router.include_router(merge_router)

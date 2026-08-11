@@ -1369,6 +1369,71 @@ async def get_users_with_active_subscriptions(db: AsyncSession) -> list[User]:
     return result.scalars().unique().all()
 
 
+async def get_user_by_phone(db: AsyncSession, phone: str) -> User | None:
+    """Find a user by verified phone number (E.164)."""
+    result = await db.execute(select(User).where(User.phone == phone))
+    return result.scalar_one_or_none()
+
+
+async def create_user_by_phone(
+    db: AsyncSession,
+    phone: str,
+    language: str = 'ru',
+    referred_by_id: int | None = None,
+) -> User:
+    """Create a user registered by phone number (no Telegram, no email).
+
+    Mirrors :func:`create_user_by_email`. The number is stored already verified:
+    the account only exists because an incoming call from that exact number was
+    confirmed, so there is nothing left to verify afterwards.
+    """
+    referral_code = await create_unique_referral_code(db)
+    normalized_language = _normalize_language_code(language)
+    default_group = await _get_or_create_default_promo_group(db)
+
+    user = User(
+        telegram_id=None,
+        auth_type='phone',
+        phone=phone,
+        phone_verified=True,
+        phone_verified_at=datetime.now(UTC),
+        username=None,
+        first_name=None,
+        last_name=None,
+        language=normalized_language,
+        referred_by_id=referred_by_id,
+        referral_code=referral_code,
+        balance_kopeks=0,
+        has_had_paid_subscription=False,
+        has_made_first_topup=False,
+        promo_group_id=default_group.id,
+    )
+
+    db.add(user)
+    await db.commit()
+    await db.refresh(user)
+    user.promo_group = default_group
+
+    logger.info('✅ Создан пользователь по номеру телефона', user_id=user.id)
+
+    try:
+        from app.services.event_emitter import event_emitter
+
+        await event_emitter.emit(
+            'user.created',
+            {
+                'user_id': user.id,
+                'auth_type': 'phone',
+                'referral_code': user.referral_code,
+                'referred_by_id': user.referred_by_id,
+            },
+        )
+    except Exception as error:  # событие не должно ломать регистрацию
+        logger.warning('Не удалось отправить событие user.created', error=str(error))
+
+    return user
+
+
 async def create_user_by_email(
     db: AsyncSession,
     email: str,

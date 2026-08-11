@@ -2089,6 +2089,12 @@ class User(Base):
     remnawave_id = Column(BigInteger, nullable=True, unique=True, index=True)
     remnawave_uuid = Column(String(255), nullable=True, unique=True)
 
+    # Phone authentication (verification by incoming call, see app/cabinet/auth/flashcall.py).
+    # auth_type gets a third value 'phone' next to 'telegram' and 'email'.
+    phone = Column(String(20), unique=True, nullable=True, index=True)  # E.164: +79991234567
+    phone_verified = Column(Boolean, default=False, nullable=False)
+    phone_verified_at = Column(AwareDateTime(), nullable=True)
+
     # Cabinet authentication fields
     email = Column(String(255), unique=True, nullable=True, index=True)
     email_verified = Column(Boolean, default=False, nullable=False)
@@ -4634,6 +4640,34 @@ class YandexClientIdMap(Base):
     yclid = Column(String(64), nullable=True)
     created_at = Column(AwareDateTime(), server_default=func.now())
     updated_at = Column(AwareDateTime(), server_default=func.now(), onupdate=func.now())
+
+
+class PhoneAuthAttempt(Base):
+    """One phone verification attempt (incoming call).
+
+    Kept out of ``users`` on purpose: attempts are short-lived, numerous and
+    exist for numbers that may never become accounts. Rate limiting reads them
+    by phone and by ip.
+    """
+
+    __tablename__ = 'phone_auth_attempts'
+
+    id = Column(Integer, primary_key=True, index=True)
+    phone = Column(String(20), nullable=False, index=True)  # E.164, normalised before storing
+    # What the client sees. Deliberately ours and opaque: the browser must not
+    # learn which provider serves the call, so the provider's own id never
+    # leaves the backend.
+    public_id = Column(String(64), nullable=False, unique=True, index=True)
+    call_id = Column(String(128), nullable=False, index=True)  # provider-side id, internal only
+    provider = Column(String(32), nullable=False)
+    dial_number = Column(String(20), nullable=True)  # number the user was asked to call
+    attempts = Column(Integer, nullable=False, default=0, server_default='0')  # status polls
+    cost = Column(String(16), nullable=True)  # what the provider charged, for expense tracking
+    expires_at = Column(AwareDateTime(), nullable=False)
+    consumed_at = Column(AwareDateTime(), nullable=True)
+    ip = Column(String(45), nullable=True)  # IPv6-sized
+    user_agent = Column(String(512), nullable=True)
+    created_at = Column(AwareDateTime(), server_default=func.now(), index=True)
 
 
 class InfoPage(Base):
