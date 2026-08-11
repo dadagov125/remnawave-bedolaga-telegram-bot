@@ -516,3 +516,20 @@ async def test_link_is_idempotent_for_the_same_number(monkeypatch):
 
     assert result.linked is True
     owner_lookup.assert_not_awaited()
+
+
+def test_linked_providers_list_has_no_duplicate_phone(monkeypatch):
+    """Телефон в списке ровно один раз.
+
+    Запись `phone` есть и в конфиге OAuth-провайдеров — это флаг функции для
+    кабинета, а не OAuth. Пока фильтра не было, «Подключённые аккаунты»
+    показывали две одинаковые строки «Телефон», и выглядело это как два
+    аккаунта с одним номером.
+    """
+    from app.cabinet.routes.account_linking import _get_active_providers
+
+    monkeypatch.setattr(settings, 'PHONE_AUTH_ENABLED', True)
+    providers = _get_active_providers()
+
+    assert providers.count('phone') == 1
+    assert len(providers) == len(set(providers))

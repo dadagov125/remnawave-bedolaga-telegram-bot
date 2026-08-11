@@ -90,7 +90,9 @@ def _get_active_providers() -> list[str]:
     # появляться в «Подключённых аккаунтах». Привязка живёт в routes/auth_phone.py.
     if settings.PHONE_AUTH_ENABLED:
         providers.append('phone')
-    providers.extend(settings.get_enabled_oauth_provider_names())
+    # 'phone' лежит и в списке OAuth-провайдеров, но OAuth он не является: запись
+    # там — флаг функции для кабинета. Без фильтра строка «Телефон» задваивается.
+    providers.extend(name for name in settings.get_enabled_oauth_provider_names() if name != 'phone')
     return providers
 
 
