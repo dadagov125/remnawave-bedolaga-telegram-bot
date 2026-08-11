@@ -8,9 +8,8 @@ swapping a provider cannot weaken them:
   the limits would be trivially bypassed;
 * three rate-limit levels (number, IP, global) because every completed call
   costs money: an unmetered endpoint is a direct attack on the balance;
-* the caller ID reported by the provider must equal the number the user typed.
-  A provider saying "a call arrived" proves nothing on its own — the match is
-  what proves ownership.
+* the caller ID reported by the provider must equal the number the user typed —
+  defence in depth against a provider mixing up sessions.
 """
 
 import re
@@ -163,9 +162,10 @@ async def poll_verification(db: AsyncSession, public_id: str) -> tuple[str, bool
         await db.commit()
         return attempt.phone, False
 
-    # The provider only reports that *a* call arrived. Ownership is proven by
-    # the caller ID matching what the user typed — without this check anyone
-    # could confirm somebody else's number by calling from their own phone.
+    # Ownership is proven by the provider: we declare the expected caller when
+    # creating the check, and CONFIRMED only comes for a call from that number.
+    # This comparison is defence in depth — it catches a provider that confuses
+    # sessions or starts reporting the real caller instead of an echo.
     if status.caller_phone:
         try:
             caller = normalize_phone(status.caller_phone)

@@ -8,6 +8,15 @@ Two endpoints, no SDK, no webhooks: the result is polled.
 ``status`` is PENDING / CONFIRMED / EXPIRED. The provider gives the user
 60 seconds from creation, which is why the UI shows a countdown rather than a
 vague "waiting" state.
+
+Two things learned from the live API, worth keeping written down:
+
+* ``get-phone`` answers **201**, not 200 — accept any 2xx or the happy path dies
+  on the very first request;
+* ``callerPhone`` in the status response is an echo of the number we submitted,
+  not the number that actually dialled. The matching is done by the provider: we
+  declare the expected caller when creating the check, and CONFIRMED only comes
+  for a call from that number.
 """
 
 import aiohttp
@@ -39,7 +48,8 @@ class FlashcallRuProvider:
         async with aiohttp.ClientSession(timeout=self.timeout) as session:
             async with session.post(f'{BASE_URL}/get-phone', json=payload) as response:
                 body = await response.json(content_type=None)
-                if response.status != 200:
+                # 201 Created is their success code for a new check.
+                if not 200 <= response.status < 300:
                     logger.error('flashcall.ru get-phone failed', status=response.status, body=str(body)[:200])
                     raise RuntimeError(f'flashcall.ru returned {response.status}')
 
@@ -54,7 +64,7 @@ class FlashcallRuProvider:
         async with aiohttp.ClientSession(timeout=self.timeout) as session:
             async with session.get(f'{BASE_URL}/status', params=params) as response:
                 body = await response.json(content_type=None)
-                if response.status != 200:
+                if not 200 <= response.status < 300:
                     logger.error('flashcall.ru status failed', status=response.status, body=str(body)[:200])
                     raise RuntimeError(f'flashcall.ru returned {response.status}')
 
