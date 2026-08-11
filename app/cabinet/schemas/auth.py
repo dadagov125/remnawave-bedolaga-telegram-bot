@@ -144,12 +144,15 @@ class UserResponse(BaseModel):
     last_name: str | None = None
     email: str | None = None
     email_verified: bool = False
+    # Вход по номеру: кабинет показывает его в профиле рядом с почтой.
+    phone: str | None = None
+    phone_verified: bool = False
     balance_kopeks: int = 0
     balance_rubles: float = 0.0
     referral_code: str | None = None
     language: str = 'ru'
     created_at: datetime
-    auth_type: str = 'telegram'  # "telegram" или "email"
+    auth_type: str = 'telegram'  # "telegram", "email" или "phone"
 
     class Config:
         from_attributes = True

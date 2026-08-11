@@ -42,6 +42,9 @@ def _make_user(
     email_verified: bool = False,
     email_verified_at: datetime | None = None,
     password_hash: str | None = None,
+    phone: str | None = None,
+    phone_verified: bool = False,
+    phone_verified_at: datetime | None = None,
     google_id: str | None = None,
     yandex_id: str | None = None,
     discord_id: str | None = None,
@@ -74,6 +77,9 @@ def _make_user(
         email_verified=email_verified,
         email_verified_at=email_verified_at,
         password_hash=password_hash,
+        phone=phone,
+        phone_verified=phone_verified,
+        phone_verified_at=phone_verified_at,
         google_id=google_id,
         yandex_id=yandex_id,
         discord_id=discord_id,
@@ -470,6 +476,51 @@ class TestExecuteMergeEmailTransfer:
             result = await execute_merge(db, 1, 2)
 
         assert result.email == 'pri@example.com'
+
+
+class TestExecuteMergePhoneTransfer:
+    """Номер — уникальная колонка: если его не перенести и не обнулить на
+    тумбстоуне, он навсегда останется занят удалённым аккаунтом и больше
+    никому не привяжется."""
+
+    async def test_transfers_phone(self, monkeypatch):
+        db = _make_db()
+        primary = _make_user(id=1)
+        secondary = _make_user(
+            id=2,
+            phone='+79991234567',
+            phone_verified=True,
+            phone_verified_at=datetime(2024, 6, 1, tzinfo=UTC),
+        )
+        monkeypatch.setattr(
+            account_merge_service,
+            'get_user_by_id',
+            AsyncMock(side_effect=[primary, secondary]),
+        )
+        with _patch_remnawave_delete():
+            result = await execute_merge(db, 1, 2)
+
+        assert result.phone == '+79991234567'
+        assert result.phone_verified is True
+        assert secondary.phone is None
+        assert secondary.phone_verified is False
+
+    async def test_does_not_overwrite_existing_phone(self, monkeypatch):
+        db = _make_db()
+        primary = _make_user(id=1, phone='+79990000001', phone_verified=True)
+        secondary = _make_user(id=2, phone='+79990000002', phone_verified=True)
+        monkeypatch.setattr(
+            account_merge_service,
+            'get_user_by_id',
+            AsyncMock(side_effect=[primary, secondary]),
+        )
+        with _patch_remnawave_delete():
+            result = await execute_merge(db, 1, 2)
+
+        assert result.phone == '+79990000001'
+        # Номер secondary всё равно освобождён — аккаунт-тумбстоун не должен
+        # держать unique-констрейнт.
+        assert secondary.phone is None
 
 
 class TestExecuteMergeBalance:

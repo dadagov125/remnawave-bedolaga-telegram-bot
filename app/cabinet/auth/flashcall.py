@@ -26,9 +26,23 @@ from app.external.flashcall import get_provider
 from app.external.flashcall.base import NoNumbersAvailableError
 from app.utils.cache import RateLimitCache
 
+
 logger = structlog.get_logger(__name__)
 
 _DIGITS = re.compile(r'\D+')
+
+#: Сколько ещё опрашивать провайдера после нашего окна. Пользователь звонит с
+#: телефона, на котором открыта страница: пока идёт вызов, вкладка в фоне и
+#: таймеры заморожены, так что подтверждение часто приходит позже окна. Провайдер
+#: — источник истины: он ответит EXPIRED, если действительно поздно.
+POLL_GRACE = timedelta(seconds=90)
+
+#: Подтверждённую проверку можно предъявить повторно в течение этого времени.
+#: Ответ на успешный опрос теряется штатно — телефон в звонке, соединение рвётся,
+#: вкладка перезагружается. Без повторной выдачи оплаченный звонок пропадал, а
+#: пользователь видел «проверка уже использована». Предъявить может только тот,
+#: у кого есть секретный public_id, то есть тот же клиент.
+REISSUE_WINDOW = timedelta(minutes=10)
 
 
 class PhoneAuthError(Exception):
@@ -126,10 +140,13 @@ async def start_verification(
         .limit(1),
     )
     live = existing.scalar_one_or_none()
+    # Меньше 15 секунд — не переиспользуем: набрать номер за это время нереально,
+    # пользователь получил бы заведомо мёртвую проверку.
     if live is not None and live.dial_number:
         left = int((live.expires_at - datetime.now(UTC)).total_seconds())
-        logger.info('Phone verification reused', phone=mask_phone(phone), seconds_left=left)
-        return live, live.dial_number, max(left, 1)
+        if left >= 15:
+            logger.info('Phone verification reused', phone=mask_phone(phone), seconds_left=left)
+            return live, live.dial_number, left
 
     await _check_rate_limits(phone, ip)
 
@@ -174,9 +191,20 @@ async def poll_verification(db: AsyncSession, public_id: str) -> tuple[str, bool
     result = await db.execute(select(PhoneAuthAttempt).where(PhoneAuthAttempt.public_id == public_id).limit(1))
     attempt = result.scalar_one_or_none()
 
-    if attempt is None or attempt.consumed_at is not None:
-        raise VerificationExpiredError('Проверка не найдена или уже использована')
-    if attempt.expires_at <= datetime.now(UTC):
+    if attempt is None:
+        raise VerificationExpiredError('Проверка не найдена')
+
+    now = datetime.now(UTC)
+
+    # Уже подтверждена: отдаём тот же ответ, а не «использована». Провайдера
+    # больше не спрашиваем — платить второй раз не за что.
+    if attempt.consumed_at is not None:
+        if now - attempt.consumed_at <= REISSUE_WINDOW:
+            logger.info('Phone verification re-issued', phone=mask_phone(attempt.phone))
+            return attempt.phone, True
+        raise VerificationExpiredError('Проверка уже использована')
+
+    if attempt.expires_at + POLL_GRACE <= now:
         raise VerificationExpiredError('Время ожидания звонка истекло')
 
     status = await get_provider(attempt.provider).status(attempt.call_id)

@@ -106,6 +106,9 @@ def compute_auth_methods(user: User) -> list[str]:
         methods.append('telegram')
     if user.email and user.password_hash:
         methods.append('email')
+    # Вход по номеру: пароля у него нет, доказательство — сам звонок.
+    if getattr(user, 'phone', None) and getattr(user, 'phone_verified', False):
+        methods.append('phone')
     for provider, column in OAUTH_PROVIDER_COLUMNS.items():
         if getattr(user, column, None):
             methods.append(provider)
@@ -139,6 +142,7 @@ def _build_user_preview(user: User) -> dict[str, Any]:
         'username': user.username,
         'first_name': user.first_name,
         'email': user.email,
+        'phone': getattr(user, 'phone', None),
         'auth_methods': compute_auth_methods(user),
         'balance_kopeks': user.balance_kopeks,
         'subscription': _build_subscription_preview(subs[0] if subs else None),
@@ -650,6 +654,24 @@ async def execute_merge(
             secondary_id=secondary.id,
         )
 
+    # 3.1. Перенос телефона (unique constraint — очистка secondary, flush, установка)
+    if not primary.phone and secondary.phone:
+        transferred_phone = secondary.phone
+        transferred_phone_verified = secondary.phone_verified
+        transferred_phone_verified_at = secondary.phone_verified_at
+        secondary.phone = None
+        secondary.phone_verified = False
+        secondary.phone_verified_at = None
+        await db.flush()
+        primary.phone = transferred_phone
+        primary.phone_verified = transferred_phone_verified
+        primary.phone_verified_at = transferred_phone_verified_at
+        logger.info(
+            'Перенесён номер телефона',
+            primary_id=primary.id,
+            secondary_id=secondary.id,
+        )
+
     # 4. Суммируем баланс (включая отрицательный — долг не должен исчезать)
     transferred_kopeks = secondary.balance_kopeks
     if transferred_kopeks != 0:
@@ -1011,6 +1033,9 @@ async def execute_merge(
     secondary.password_reset_token = None
     secondary.password_reset_expires = None
     secondary.telegram_id = None
+    secondary.phone = None
+    secondary.phone_verified = False
+    secondary.phone_verified_at = None
     for field in _OAUTH_FIELDS:
         if getattr(secondary, field) is not None:
             setattr(secondary, field, None)

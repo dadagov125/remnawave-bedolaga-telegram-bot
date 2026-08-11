@@ -86,6 +86,10 @@ def _get_active_providers() -> list[str]:
     providers: list[str] = ['telegram']
     if settings.is_cabinet_email_auth_enabled():
         providers.append('email')
+    # Наша доработка: вход по номеру — такой же метод, как email, и должен
+    # появляться в «Подключённых аккаунтах». Привязка живёт в routes/auth_phone.py.
+    if settings.PHONE_AUTH_ENABLED:
+        providers.append('phone')
     providers.extend(settings.get_enabled_oauth_provider_names())
     return providers
 
@@ -209,6 +213,8 @@ def _get_provider_identifier(user: User, provider: str) -> str | None:
             return str(user.telegram_id) if user.telegram_id else None
         case 'email':
             return user.email if user.email and user.password_hash else None
+        case 'phone':
+            return user.phone if user.phone and user.phone_verified else None
         case _:
             column = OAUTH_PROVIDER_COLUMNS.get(provider)
             if not column:

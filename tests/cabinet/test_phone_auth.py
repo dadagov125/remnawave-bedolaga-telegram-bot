@@ -129,15 +129,49 @@ async def test_poll_rejects_unknown_session():
 
 
 @pytest.mark.asyncio
-async def test_poll_rejects_already_used_session():
-    attempt = _attempt(consumed_at=datetime.now(UTC))
+async def test_poll_reissues_recently_confirmed_session():
+    """Ответ на успешный опрос теряется штатно: телефон в этот момент в звонке,
+    вкладка в фоне, соединение рвётся. Повторный опрос обязан отдать тот же
+    результат — иначе оплаченный звонок пропадает, а пользователь видит
+    «проверка уже использована». Ровно это и случилось на проде.
+    """
+    attempt = _attempt(consumed_at=datetime.now(UTC) - timedelta(minutes=1))
+
+    phone, confirmed = await poll_verification(_db_returning(attempt), 'public')
+
+    assert (phone, confirmed) == ('+79991234567', True)
+
+
+@pytest.mark.asyncio
+async def test_poll_rejects_long_used_session():
+    """Окно повторной выдачи не бесконечно: старый public_id — уже не пропуск."""
+    attempt = _attempt(consumed_at=datetime.now(UTC) - timedelta(minutes=30))
     with pytest.raises(VerificationExpiredError):
         await poll_verification(_db_returning(attempt), 'public')
 
 
 @pytest.mark.asyncio
-async def test_poll_rejects_expired_window():
+async def test_poll_keeps_asking_provider_just_after_the_window(monkeypatch):
+    """Секунда после окна — ещё не отказ.
+
+    Звонок часто подтверждается позже: пока идёт вызов, браузер морозит вкладку.
+    Источник истины об истечении — провайдер, а не наши часы.
+    """
     attempt = _attempt(expires_at=datetime.now(UTC) - timedelta(seconds=1))
+    stub = SimpleNamespace(
+        status=AsyncMock(return_value=VerificationStatus(confirmed=False)),
+    )
+    monkeypatch.setattr('app.cabinet.auth.flashcall.get_provider', lambda *_: stub)
+
+    phone, confirmed = await poll_verification(_db_returning(attempt), 'public')
+
+    assert confirmed is False
+    stub.status.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_poll_rejects_window_expired_long_ago():
+    attempt = _attempt(expires_at=datetime.now(UTC) - timedelta(minutes=5))
     with pytest.raises(VerificationExpiredError):
         await poll_verification(_db_returning(attempt), 'public')
 
@@ -197,6 +231,10 @@ def test_phone_routes_are_registered(registered_paths):
     assert 'POST' in registered_paths['/cabinet/auth/phone/call/status']
     # Переключатель для админки — рядом с ним, а не в апстримном branding.py
     assert {'GET', 'PATCH'} <= registered_paths['/cabinet/auth/phone/settings']
+    # Привязка номера к существующему аккаунту
+    assert 'POST' in registered_paths['/cabinet/auth/phone/link/call']
+    assert 'POST' in registered_paths['/cabinet/auth/phone/link/call/status']
+    assert 'POST' in registered_paths['/cabinet/auth/phone/unlink']
 
 
 def test_phone_oauth_wrapper_is_gone(registered_paths):
@@ -357,3 +395,124 @@ async def test_env_locked_setting_is_refused(monkeypatch):
         )
 
     assert error.value.status_code == 409
+
+
+# ── привязка номера и слияние аккаунтов ──────────────────────────
+def _user(**overrides):
+    base = {
+        'id': 1,
+        'telegram_id': None,
+        'email': None,
+        'password_hash': None,
+        'phone': None,
+        'phone_verified': False,
+        'phone_verified_at': None,
+    }
+    base.update(overrides)
+    for column in ('google_id', 'yandex_id', 'discord_id', 'vk_id'):
+        base.setdefault(column, None)
+    return SimpleNamespace(**base)
+
+
+def test_phone_counts_as_an_auth_method():
+    """Иначе последний способ входа можно отвязать и запереть себя снаружи."""
+    from app.services.account_merge_service import compute_auth_methods
+
+    assert compute_auth_methods(_user(phone='+79991234567', phone_verified=True)) == ['phone']
+    # Неподтверждённый номер способом входа не является.
+    assert compute_auth_methods(_user(phone='+79991234567')) == []
+
+
+@pytest.mark.asyncio
+async def test_unlink_refuses_to_drop_the_only_method():
+    from fastapi import HTTPException
+
+    from app.cabinet.routes.auth_phone import unlink_phone
+
+    user = _user(phone='+79991234567', phone_verified=True)
+    with pytest.raises(HTTPException) as error:
+        await unlink_phone(user=user, db=AsyncMock())
+
+    assert error.value.status_code == 400
+    assert user.phone == '+79991234567'
+
+
+@pytest.mark.asyncio
+async def test_unlink_works_when_another_method_remains():
+    from app.cabinet.routes.auth_phone import unlink_phone
+
+    user = _user(phone='+79991234567', phone_verified=True, telegram_id=42)
+    result = await unlink_phone(user=user, db=AsyncMock())
+
+    assert result.success is True
+    assert user.phone is None
+    assert user.phone_verified is False
+
+
+@pytest.mark.asyncio
+async def test_link_offers_merge_when_number_belongs_to_another_account(monkeypatch):
+    """Звонок доказал владение номером, но номер занят другим аккаунтом.
+
+    Отказать нельзя — это тупик; привязать молча тоже нельзя. Предлагаем слияние
+    тем же токеном, что и привязка Telegram.
+    """
+    from app.cabinet.routes import auth_phone
+
+    user = _user(id=1, telegram_id=42)
+    other = _user(id=2, phone='+79991234567', phone_verified=True)
+
+    monkeypatch.setattr(settings, 'PHONE_AUTH_ENABLED', True)
+    monkeypatch.setattr(auth_phone, 'poll_verification', AsyncMock(return_value=('+79991234567', True)))
+    monkeypatch.setattr(auth_phone, 'get_user_by_phone', AsyncMock(return_value=other))
+    monkeypatch.setattr(auth_phone, 'create_merge_token', AsyncMock(return_value='merge-token'))
+
+    result = await auth_phone.check_link_verification(
+        auth_phone.PhoneCallStatusBody(session_id='public'),
+        user=user,
+        db=AsyncMock(),
+    )
+
+    assert (result.merge_required, result.merge_token) == (True, 'merge-token')
+    assert user.phone is None  # чужой номер не присваиваем
+
+
+@pytest.mark.asyncio
+async def test_link_attaches_free_number(monkeypatch):
+    from app.cabinet.routes import auth_phone
+
+    user = _user(id=1, telegram_id=42)
+
+    monkeypatch.setattr(settings, 'PHONE_AUTH_ENABLED', True)
+    monkeypatch.setattr(auth_phone, 'poll_verification', AsyncMock(return_value=('+79991234567', True)))
+    monkeypatch.setattr(auth_phone, 'get_user_by_phone', AsyncMock(return_value=None))
+
+    result = await auth_phone.check_link_verification(
+        auth_phone.PhoneCallStatusBody(session_id='public'),
+        user=user,
+        db=AsyncMock(),
+    )
+
+    assert (result.linked, result.phone) == (True, '+79991234567')
+    assert user.phone_verified is True
+
+
+@pytest.mark.asyncio
+async def test_link_is_idempotent_for_the_same_number(monkeypatch):
+    """Повторный опрос после успешной привязки — не ошибка: ответ мог не дойти."""
+    from app.cabinet.routes import auth_phone
+
+    user = _user(id=1, phone='+79991234567', phone_verified=True)
+    owner_lookup = AsyncMock(return_value=None)
+
+    monkeypatch.setattr(settings, 'PHONE_AUTH_ENABLED', True)
+    monkeypatch.setattr(auth_phone, 'poll_verification', AsyncMock(return_value=('+79991234567', True)))
+    monkeypatch.setattr(auth_phone, 'get_user_by_phone', owner_lookup)
+
+    result = await auth_phone.check_link_verification(
+        auth_phone.PhoneCallStatusBody(session_id='public'),
+        user=user,
+        db=AsyncMock(),
+    )
+
+    assert result.linked is True
+    owner_lookup.assert_not_awaited()

@@ -2,10 +2,13 @@
 
 Routes are grouped by *channel*, not by provider:
 
-    POST  /auth/phone/call          start verification by incoming call
-    POST  /auth/phone/call/status   poll it; returns a session once confirmed
-    GET   /auth/phone/settings      admin: is it on, which provider, is it usable
-    PATCH /auth/phone/settings      admin: turn it on or off
+    POST  /auth/phone/call             start verification by incoming call
+    POST  /auth/phone/call/status      poll it; returns a session once confirmed
+    POST  /auth/phone/link/call        same, for attaching a number to the account
+    POST  /auth/phone/link/call/status poll it; links the number or offers a merge
+    POST  /auth/phone/unlink           detach the number
+    GET   /auth/phone/settings         admin: is it on, which provider, is it usable
+    PATCH /auth/phone/settings         admin: turn it on or off
 
     (reserved) POST /auth/phone/sms         send a code by SMS
     (reserved) POST /auth/phone/sms/verify  check the code
@@ -23,6 +26,8 @@ The call flow has no code to type: the proof of ownership is that the call
 arrived from the number the user entered.
 """
 
+from datetime import UTC, datetime
+
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
@@ -32,6 +37,7 @@ from app.config import settings
 from app.database.crud.user import create_user_by_phone, get_user_by_phone
 from app.database.models import User
 from app.external.flashcall import list_providers
+from app.services.account_merge_service import compute_auth_methods
 from app.services.system_settings_service import ReadOnlySettingError, bot_configuration_service
 
 from ..auth.flashcall import (
@@ -45,7 +51,8 @@ from ..auth.flashcall import (
     poll_verification,
     start_verification,
 )
-from ..dependencies import get_cabinet_db, require_permission
+from ..auth.merge_service import create_merge_token
+from ..dependencies import get_cabinet_db, get_current_cabinet_user, require_permission
 from ..ip_utils import get_client_ip
 from ..schemas.auth import AuthResponse
 from .auth import _create_auth_response, _store_refresh_token
@@ -153,6 +160,112 @@ async def check_call_verification(
     await _store_refresh_token(db, user.id, response.refresh_token)
     return response
 
+
+# ── Привязка номера к существующему аккаунту ─────────────────────
+# Тот же звонок, что и при входе, только результатом становится не сессия, а
+# запись номера в аккаунт. Пользователь, вошедший через Telegram или почту,
+# добавляет номер; вошедший по номеру — добавляет почту (это умеет апстримный
+# /auth/email/register) и Telegram (/auth/account/link/telegram).
+
+
+class PhoneLinkStatusResponse(BaseModel):
+    linked: bool = False
+    phone: str | None = None
+    # Номер уже принадлежит другому аккаунту. Звонок доказал, что оба — этого же
+    # человека, поэтому предлагаем слияние тем же механизмом, что у Telegram.
+    merge_required: bool = False
+    merge_token: str | None = None
+
+
+class PhoneUnlinkResponse(BaseModel):
+    success: bool
+
+
+@router.post('/link/call', response_model=PhoneCallResponse)
+async def start_link_verification(
+    body: PhoneCallBody,
+    request: Request,
+    user: User = Depends(get_current_cabinet_user),
+    db: AsyncSession = Depends(get_cabinet_db),
+):
+    """Ask the provider for a number to call, to attach a phone to this account."""
+    _ensure_enabled()
+
+    if user.phone and user.phone_verified:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, 'К аккаунту уже привязан номер')
+
+    return await start_call_verification(body, request, db)
+
+
+@router.post('/link/call/status', response_model=PhoneLinkStatusResponse)
+async def check_link_verification(
+    body: PhoneCallStatusBody,
+    user: User = Depends(get_current_cabinet_user),
+    db: AsyncSession = Depends(get_cabinet_db),
+):
+    """Poll the provider; attach the number once the call is confirmed."""
+    _ensure_enabled()
+
+    try:
+        phone, confirmed = await poll_verification(db, body.session_id)
+    except VerificationExpiredError as error:
+        raise HTTPException(status.HTTP_410_GONE, str(error)) from error
+    except PhoneAuthError as error:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(error)) from error
+
+    if not confirmed:
+        raise HTTPException(status.HTTP_202_ACCEPTED, 'Ожидаем звонок')
+
+    # Повторный опрос после успешной привязки (ответ мог не дойти) — не ошибка.
+    if user.phone == phone and user.phone_verified:
+        return PhoneLinkStatusResponse(linked=True, phone=phone)
+
+    owner = await get_user_by_phone(db, phone)
+    if owner is not None and owner.id != user.id:
+        merge_token = await create_merge_token(
+            primary_user_id=user.id,
+            secondary_user_id=owner.id,
+            provider='phone',
+            provider_id=phone,
+        )
+        logger.info(
+            'Phone belongs to another account, merge offered',
+            user_id=user.id,
+            other_user_id=owner.id,
+            phone=mask_phone(phone),
+        )
+        return PhoneLinkStatusResponse(merge_required=True, merge_token=merge_token)
+
+    user.phone = phone
+    user.phone_verified = True
+    user.phone_verified_at = datetime.now(UTC)
+    await db.commit()
+
+    logger.info('Phone linked to account', user_id=user.id, phone=mask_phone(phone))
+    return PhoneLinkStatusResponse(linked=True, phone=phone)
+
+
+@router.post('/unlink', response_model=PhoneUnlinkResponse)
+async def unlink_phone(
+    user: User = Depends(get_current_cabinet_user),
+    db: AsyncSession = Depends(get_cabinet_db),
+):
+    """Detach the number, unless it is the only way left to log in."""
+    if not user.phone:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, 'Номер не привязан')
+
+    # Тот же инвариант, что у OAuth-провайдеров: последний способ входа не
+    # отвязываем, иначе пользователь запирает сам себя снаружи.
+    if len(compute_auth_methods(user)) <= 1:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, 'Это единственный способ входа в аккаунт')
+
+    user.phone = None
+    user.phone_verified = False
+    user.phone_verified_at = None
+    await db.commit()
+
+    logger.info('Phone unlinked from account', user_id=user.id)
+    return PhoneUnlinkResponse(success=True)
 
 # ── Переключатель в админке ──────────────────────────────────────
 # Отдельно от общего списка настроек бота: вход по номеру включается там же, где
