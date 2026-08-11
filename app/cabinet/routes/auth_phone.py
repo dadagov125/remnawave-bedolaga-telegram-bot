@@ -2,8 +2,10 @@
 
 Routes are grouped by *channel*, not by provider:
 
-    POST /auth/phone/call          start verification by incoming call
-    POST /auth/phone/call/status   poll it; returns a session once confirmed
+    POST  /auth/phone/call          start verification by incoming call
+    POST  /auth/phone/call/status   poll it; returns a session once confirmed
+    GET   /auth/phone/settings      admin: is it on, which provider, is it usable
+    PATCH /auth/phone/settings      admin: turn it on or off
 
     (reserved) POST /auth/phone/sms         send a code by SMS
     (reserved) POST /auth/phone/sms/verify  check the code
@@ -28,6 +30,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database.crud.user import create_user_by_phone, get_user_by_phone
+from app.database.models import User
+from app.external.flashcall import list_providers
+from app.services.system_settings_service import ReadOnlySettingError, bot_configuration_service
 
 from ..auth.flashcall import (
     InvalidPhoneError,
@@ -40,10 +45,11 @@ from ..auth.flashcall import (
     poll_verification,
     start_verification,
 )
-from ..dependencies import get_cabinet_db
+from ..dependencies import get_cabinet_db, require_permission
 from ..ip_utils import get_client_ip
 from ..schemas.auth import AuthResponse
 from .auth import _create_auth_response, _store_refresh_token
+
 
 logger = structlog.get_logger(__name__)
 
@@ -146,3 +152,81 @@ async def check_call_verification(
     response = await _create_auth_response(user, db)
     await _store_refresh_token(db, user.id, response.refresh_token)
     return response
+
+
+# ── Переключатель в админке ──────────────────────────────────────
+# Отдельно от общего списка настроек бота: вход по номеру включается там же, где
+# вход по email (Внешний вид → Опции интерфейса), иначе администратор ищет один
+# способ входа в двух разных местах.
+#
+# Роуты живут здесь, а не в апстримном branding.py, чтобы ребейз не конфликтовал.
+
+
+SETTING_KEY = 'PHONE_AUTH_ENABLED'
+
+
+class PhoneAuthSettings(BaseModel):
+    enabled: bool
+    provider: str
+    # Выбранный провайдер настроен (есть ключ). Без этого включённый вход
+    # показывал бы вкладку, которая падает на первом же запросе.
+    configured: bool
+
+
+class PhoneAuthSettingsUpdate(BaseModel):
+    enabled: bool
+
+
+def _phone_auth_settings() -> PhoneAuthSettings:
+    provider = (settings.PHONE_AUTH_PROVIDER or 'mock').strip().lower()
+    # ProviderInfo — TypedDict, поэтому обращение по ключам.
+    configured = any(i['name'] == provider and i['is_configured'] for i in list_providers())
+    return PhoneAuthSettings(
+        enabled=bool(settings.PHONE_AUTH_ENABLED),
+        provider=provider,
+        configured=configured,
+    )
+
+
+# GET только для админа: имя провайдера — не то, что должен видеть клиент.
+# Странице входа он и не нужен, она узнаёт о способе из списка провайдеров.
+@router.get('/settings', response_model=PhoneAuthSettings)
+async def get_phone_auth_settings(_: User = Depends(require_permission('settings:edit'))):
+    """Current state of phone login."""
+    return _phone_auth_settings()
+
+
+@router.patch('/settings', response_model=PhoneAuthSettings)
+async def update_phone_auth_settings(
+    body: PhoneAuthSettingsUpdate,
+    admin: User = Depends(require_permission('settings:edit')),
+    db: AsyncSession = Depends(get_cabinet_db),
+):
+    """Turn phone login on or off."""
+    current = _phone_auth_settings()
+
+    # Включать ненастроенный провайдер бессмысленно: вкладка появится, а первый
+    # же звонок упадёт. Отключить можно всегда.
+    if body.enabled and not current.configured:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f'Провайдер {current.provider} не настроен: укажите ключ в настройках бота',
+        )
+
+    # Заданное через окружение значение сохранилось бы в базу, но не применилось —
+    # переключатель молча не сработал бы. Проверяем заранее, как это делает общий
+    # экран настроек.
+    if bot_configuration_service.is_env_locked(SETTING_KEY):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f'{SETTING_KEY} задана через переменную окружения — уберите её, чтобы менять из админки',
+        )
+
+    try:
+        await bot_configuration_service.set_value(db, SETTING_KEY, body.enabled)
+    except ReadOnlySettingError as error:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, str(error)) from error
+    await db.commit()
+
+    logger.info('Admin set phone auth enabled', telegram_id=admin.telegram_id, enabled=body.enabled)
+    return _phone_auth_settings()

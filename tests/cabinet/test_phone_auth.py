@@ -195,6 +195,8 @@ async def test_poll_confirms_and_consumes(monkeypatch):
 def test_phone_routes_are_registered(registered_paths):
     assert 'POST' in registered_paths['/cabinet/auth/phone/call']
     assert 'POST' in registered_paths['/cabinet/auth/phone/call/status']
+    # Переключатель для админки — рядом с ним, а не в апстримном branding.py
+    assert {'GET', 'PATCH'} <= registered_paths['/cabinet/auth/phone/settings']
 
 
 def test_phone_oauth_wrapper_is_gone(registered_paths):
@@ -250,3 +252,108 @@ async def test_start_reuses_a_live_check(monkeypatch):
     assert dial == '+74990000000'
     assert 0 < left <= 40
     create.assert_not_awaited()  # provider untouched — the point of the reuse
+
+
+# ── переключатель в админке ──────────────────────────────────────
+def test_settings_report_configured_provider(monkeypatch):
+    """`configured` показывает, есть ли у выбранного провайдера ключ.
+
+    Без этого признака админка предлагала бы включить вход, который упадёт на
+    первом же запросе к провайдеру.
+    """
+    from app.cabinet.routes.auth_phone import _phone_auth_settings
+
+    monkeypatch.setattr(settings, 'PHONE_AUTH_PROVIDER', 'flashcall_ru')
+    monkeypatch.setattr(settings, 'PHONE_AUTH_API_KEY', '')
+    assert _phone_auth_settings().configured is False
+
+    monkeypatch.setattr(settings, 'PHONE_AUTH_API_KEY', 'fc_test')
+    state = _phone_auth_settings()
+    assert state.configured is True
+    assert state.provider == 'flashcall_ru'
+
+
+def test_settings_treat_mock_as_configured(monkeypatch):
+    """mock ничего не требует — иначе локальную проверку нельзя было бы включить."""
+    from app.cabinet.routes.auth_phone import _phone_auth_settings
+
+    monkeypatch.setattr(settings, 'PHONE_AUTH_PROVIDER', 'mock')
+    monkeypatch.setattr(settings, 'PHONE_AUTH_API_KEY', '')
+    assert _phone_auth_settings().configured is True
+
+
+@pytest.mark.asyncio
+async def test_enabling_unconfigured_provider_is_refused(monkeypatch):
+    """Включение без ключа — 409, а не тихо сохранённый флаг."""
+    from fastapi import HTTPException
+
+    from app.cabinet.routes.auth_phone import PhoneAuthSettingsUpdate, update_phone_auth_settings
+
+    monkeypatch.setattr(settings, 'PHONE_AUTH_PROVIDER', 'flashcall_ru')
+    monkeypatch.setattr(settings, 'PHONE_AUTH_API_KEY', '')
+
+    with pytest.raises(HTTPException) as error:
+        await update_phone_auth_settings(
+            PhoneAuthSettingsUpdate(enabled=True),
+            admin=SimpleNamespace(telegram_id=1),
+            db=AsyncMock(),
+        )
+
+    assert error.value.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_disabling_works_even_without_key(monkeypatch):
+    """Выключить можно всегда: иначе сломанный провайдер не даёт убрать вкладку."""
+    from app.cabinet.routes.auth_phone import PhoneAuthSettingsUpdate, update_phone_auth_settings
+
+    monkeypatch.setattr(settings, 'PHONE_AUTH_PROVIDER', 'flashcall_ru')
+    monkeypatch.setattr(settings, 'PHONE_AUTH_API_KEY', '')
+    monkeypatch.setattr(settings, 'PHONE_AUTH_ENABLED', True)
+
+    saved: dict[str, object] = {}
+
+    async def fake_set_value(db, key, value):
+        saved[key] = value
+        monkeypatch.setattr(settings, key, value)
+
+    monkeypatch.setattr(
+        'app.cabinet.routes.auth_phone.bot_configuration_service.set_value', fake_set_value,
+    )
+    monkeypatch.setattr(
+        'app.cabinet.routes.auth_phone.bot_configuration_service.is_env_locked', lambda key: False,
+    )
+
+    result = await update_phone_auth_settings(
+        PhoneAuthSettingsUpdate(enabled=False),
+        admin=SimpleNamespace(telegram_id=1),
+        db=AsyncMock(),
+    )
+
+    assert saved == {'PHONE_AUTH_ENABLED': False}
+    assert result.enabled is False
+
+
+@pytest.mark.asyncio
+async def test_env_locked_setting_is_refused(monkeypatch):
+    """Значение из окружения сохранилось бы в базу, но не применилось.
+
+    Переключатель молча не сработал бы — поэтому 409 заранее.
+    """
+    from fastapi import HTTPException
+
+    from app.cabinet.routes.auth_phone import PhoneAuthSettingsUpdate, update_phone_auth_settings
+
+    monkeypatch.setattr(settings, 'PHONE_AUTH_PROVIDER', 'mock')
+    monkeypatch.setattr(
+        'app.cabinet.routes.auth_phone.bot_configuration_service.is_env_locked', lambda key: True,
+    )
+
+    with pytest.raises(HTTPException) as error:
+        await update_phone_auth_settings(
+            PhoneAuthSettingsUpdate(enabled=True),
+            admin=SimpleNamespace(telegram_id=1),
+            db=AsyncMock(),
+        )
+
+    assert error.value.status_code == 409
