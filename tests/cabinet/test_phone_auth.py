@@ -197,14 +197,15 @@ def test_phone_routes_are_registered(registered_paths):
     assert 'POST' in registered_paths['/cabinet/auth/phone/call/status']
 
 
-def test_phone_oauth_wrapper_is_registered(registered_paths):
-    """These literal paths must resolve, i.e. be registered before the
-    parameterised /auth/oauth/{provider}/... routes — and share their prefix,
-    otherwise the frontend's request never reaches them at all.
+def test_phone_oauth_wrapper_is_gone(registered_paths):
+    """Вход по номеру живёт только на /auth/phone/*.
+
+    Раньше рядом была OAuth-обёртка со своей HTML-страницей — кабинет уходил
+    на неё редиректом. Форма встроена в страницу входа, обёртка удалена: две
+    реализации одного потока расходились бы при первой же правке.
     """
-    assert 'GET' in registered_paths['/cabinet/auth/oauth/phone/authorize']
-    assert 'GET' in registered_paths['/cabinet/auth/oauth/phone/page']
-    assert 'POST' in registered_paths['/cabinet/auth/oauth/phone/callback']
+    assert '/cabinet/auth/oauth/phone/page' not in registered_paths
+    assert '/cabinet/auth/oauth/phone/authorize' not in registered_paths
 
 
 # ── provider pool exhaustion ─────────────────────────────────────

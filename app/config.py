@@ -3823,10 +3823,10 @@ class Settings(BaseSettings):
                 'enabled': self.OAUTH_VK_ENABLED,
                 'display_name': 'VK',
             },
-            # Not an OAuth provider: phone login reuses this list so the cabinet
-            # renders its button without any frontend change (the login page
-            # builds buttons from whatever this endpoint returns). The actual
-            # flow is served by our own routes, see cabinet/routes/oauth_phone.py.
+            # Not an OAuth provider: the cabinet reads this list as a feature
+            # flag and renders its own phone form when the entry is enabled.
+            # The flow itself lives on /cabinet/auth/phone/* (see
+            # cabinet/routes/auth_phone.py) and never goes through OAuth.
             # No client_id/secret — the provider key lives in PHONE_AUTH_API_KEY
             # and is configured in the admin panel, like a payment method.
             'phone': {
