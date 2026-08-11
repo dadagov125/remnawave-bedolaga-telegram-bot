@@ -111,6 +111,10 @@ class UserListItem(BaseModel):
     first_name: str | None = None
     last_name: str | None = None
     full_name: str
+    # Контакты в списке: без них строки выглядят как «User12» и различить
+    # пользователей можно только зайдя в каждого.
+    email: str | None = None
+    phone: str | None = None
     status: str
     balance_kopeks: int
     balance_rubles: float
@@ -236,6 +240,10 @@ class UserDetailResponse(BaseModel):
     # Email (cabinet)
     email: str | None = None
     email_verified: bool = False
+
+    # Телефон (вход по звонку)
+    phone: str | None = None
+    phone_verified: bool = False
 
     # Dates
     created_at: datetime

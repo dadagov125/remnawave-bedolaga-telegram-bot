@@ -1,4 +1,5 @@
 import hmac
+import re
 import secrets
 import string
 from datetime import UTC, datetime, timedelta
@@ -39,6 +40,20 @@ logger = structlog.get_logger(__name__)
 _BIGINT_MAX = 9223372036854775807
 
 
+def phone_search_pattern(phone: str) -> str | None:
+    """LIKE-шаблон для поиска по номеру.
+
+    Номер хранится в E.164 (`+79991234567`), а администратор ищет как придётся:
+    `8 999 123-45-67`, `+7 999`, `9991234567`. Поэтому от запроса оставляем цифры
+    и ищем по последним десяти — они одинаковы во всех записях одного номера,
+    какой бы код страны ни ввели.
+    """
+    digits = re.sub(r'\D', '', phone or '')
+    if not digits:
+        return None
+    return f'%{digits[-10:]}%'
+
+
 def _user_search_conditions(search: str) -> list:
     """Build the OR-conditions for the admin user search box (id/name/username).
 
@@ -62,6 +77,13 @@ def _user_search_conditions(search: str) -> list:
             search_int = None
         if search_int is not None and 0 <= search_int <= _BIGINT_MAX:
             conditions.append(User.telegram_id == search_int)
+
+    # Номер телефона: вставленный в общее поле поиска номер должен находиться,
+    # а не молча давать пустой список. Порог в пять цифр — чтобы «123» не
+    # вытаскивало половину базы.
+    digits = re.sub(r'\D', '', search)
+    if len(digits) >= 5:
+        conditions.append(User.phone.ilike(f'%{digits[-10:]}%'))
     return conditions
 
 
@@ -946,6 +968,7 @@ async def get_users_list(
     limit: int = 50,
     search: str | None = None,
     email: str | None = None,
+    phone: str | None = None,
     status: UserStatus | None = None,
     subscription_status: str | None = None,
     tariff_ids: list[int] | None = None,
@@ -1016,6 +1039,11 @@ async def get_users_list(
     if email:
         query = query.where(User.email.ilike(f'%{email}%'))
 
+    if phone:
+        pattern = phone_search_pattern(phone)
+        if pattern:
+            query = query.where(User.phone.ilike(pattern))
+
     sort_flags = [
         order_by_balance,
         order_by_traffic,
@@ -1076,6 +1104,7 @@ async def get_users_count(
     status: UserStatus | None = None,
     search: str | None = None,
     email: str | None = None,
+    phone: str | None = None,
     subscription_status: str | None = None,
     tariff_ids: list[int] | None = None,
     promo_group_id: int | None = None,
@@ -1134,6 +1163,11 @@ async def get_users_count(
 
     if email:
         query = query.where(User.email.ilike(f'%{email}%'))
+
+    if phone:
+        pattern = phone_search_pattern(phone)
+        if pattern:
+            query = query.where(User.phone.ilike(pattern))
 
     result = await db.execute(query)
     return result.scalar()

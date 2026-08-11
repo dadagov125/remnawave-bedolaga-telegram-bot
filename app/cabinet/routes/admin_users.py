@@ -219,6 +219,8 @@ def _build_user_list_item(user: User, spending_stats: dict = None) -> UserListIt
         first_name=user.first_name,
         last_name=user.last_name,
         full_name=user.full_name,
+        email=user.email,
+        phone=user.phone,
         status=user.status,
         balance_kopeks=user.balance_kopeks,
         balance_rubles=user.balance_rubles,
@@ -579,6 +581,7 @@ async def list_users(
     limit: int = Query(50, ge=1, le=200),
     search: str | None = Query(None, max_length=255),
     email: str | None = Query(None, max_length=255),
+    phone: str | None = Query(None, max_length=32),
     status: UserStatusEnum | None = Query(None),
     subscription_status: str | None = Query(None, max_length=20),
     tariff_id: str | None = Query(None, max_length=255),
@@ -594,8 +597,9 @@ async def list_users(
 
     - **offset**: Pagination offset
     - **limit**: Number of users per page (max 200)
-    - **search**: Search by telegram_id, username, first_name, last_name
+    - **search**: Search by telegram_id, username, first_name, last_name, phone
     - **email**: Search by email
+    - **phone**: Search by phone number in any format (matched by the last 10 digits)
     - **status**: Filter by user status (active, blocked, deleted)
     - **sort_by**: Sort field (created_at, balance, traffic, last_activity, total_spent, purchase_count)
     """
@@ -625,6 +629,7 @@ async def list_users(
         limit=limit,
         search=search,
         email=email,
+        phone=phone,
         status=user_status,
         subscription_status=subscription_status,
         tariff_ids=tariff_ids,
@@ -643,6 +648,7 @@ async def list_users(
         status=user_status,
         search=search,
         email=email,
+        phone=phone,
         subscription_status=subscription_status,
         tariff_ids=tariff_ids,
         promo_group_id=promo_group_id,
@@ -925,6 +931,8 @@ async def get_user_detail(
         balance_rubles=user.balance_rubles,
         email=user.email,
         email_verified=user.email_verified,
+        phone=user.phone,
+        phone_verified=bool(user.phone_verified),
         created_at=user.created_at,
         updated_at=user.updated_at,
         last_activity=user.last_activity,
