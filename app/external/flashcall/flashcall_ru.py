@@ -24,7 +24,7 @@ import structlog
 
 from app.config import settings
 
-from .base import Verification, VerificationStatus
+from .base import NoNumbersAvailableError, Verification, VerificationStatus
 
 logger = structlog.get_logger(__name__)
 
@@ -51,6 +51,11 @@ class FlashcallRuProvider:
                 # 201 Created is their success code for a new check.
                 if not 200 <= response.status < 300:
                     logger.error('flashcall.ru get-phone failed', status=response.status, body=str(body)[:200])
+                    # Numbers are allocated from a shared pool and every pending
+                    # check holds one for its window, so exhaustion is routine
+                    # under load rather than an outage.
+                    if response.status == 503 or 'пул' in str(body.get('message', '')).lower():
+                        raise NoNumbersAvailableError('no free numbers in provider pool')
                     raise RuntimeError(f'flashcall.ru returned {response.status}')
 
         return Verification(

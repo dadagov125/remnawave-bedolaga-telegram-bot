@@ -17,6 +17,16 @@ from dataclasses import dataclass
 from typing import Protocol
 
 
+class NoNumbersAvailableError(RuntimeError):
+    """Provider has no free number to hand out right now.
+
+    Not a failure of ours and not permanent: numbers come from a shared pool and
+    each pending check holds one for the duration of its window. Deserves its own
+    type so the user gets "all lines are busy, try in a minute" instead of a
+    generic outage message.
+    """
+
+
 @dataclass(frozen=True)
 class Verification:
     """Pending check: what to show the user and how long they have."""

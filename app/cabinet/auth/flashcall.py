@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.database.models import PhoneAuthAttempt
 from app.external.flashcall import get_provider
+from app.external.flashcall.base import NoNumbersAvailableError
 from app.utils.cache import RateLimitCache
 
 logger = structlog.get_logger(__name__)
@@ -48,6 +49,10 @@ class VerificationExpiredError(PhoneAuthError):
 
 class PhoneMismatchError(PhoneAuthError):
     """Someone called, but not from the number that was entered."""
+
+
+class NoNumbersError(PhoneAuthError):
+    """Provider pool is exhausted — temporary, worth retrying in a minute."""
 
 
 def normalize_phone(raw: str) -> str:
@@ -106,10 +111,33 @@ async def start_verification(
 ) -> tuple[PhoneAuthAttempt, str, int]:
     """Create a check and return (attempt, number to dial, seconds left)."""
     phone = normalize_phone(raw_phone)
+
+    # A live check for this number is reused instead of creating another one.
+    # Repeated clicks are therefore harmless, and — more importantly — we stop
+    # holding a second number from the provider's shared pool for the same user.
+    existing = await db.execute(
+        select(PhoneAuthAttempt)
+        .where(
+            PhoneAuthAttempt.phone == phone,
+            PhoneAuthAttempt.consumed_at.is_(None),
+            PhoneAuthAttempt.expires_at > datetime.now(UTC),
+        )
+        .order_by(PhoneAuthAttempt.created_at.desc())
+        .limit(1),
+    )
+    live = existing.scalar_one_or_none()
+    if live is not None and live.dial_number:
+        left = int((live.expires_at - datetime.now(UTC)).total_seconds())
+        logger.info('Phone verification reused', phone=mask_phone(phone), seconds_left=left)
+        return live, live.dial_number, max(left, 1)
+
     await _check_rate_limits(phone, ip)
 
     provider = get_provider()
-    verification = await provider.create(phone)
+    try:
+        verification = await provider.create(phone)
+    except NoNumbersAvailableError as error:
+        raise NoNumbersError('Все линии сейчас заняты, попробуйте через минуту') from error
 
     attempt = PhoneAuthAttempt(
         phone=phone,

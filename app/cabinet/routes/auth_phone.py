@@ -31,6 +31,7 @@ from app.database.crud.user import create_user_by_phone, get_user_by_phone
 
 from ..auth.flashcall import (
     InvalidPhoneError,
+    NoNumbersError,
     PhoneAuthError,
     PhoneMismatchError,
     RateLimitedError,
@@ -92,6 +93,11 @@ async def start_call_verification(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(error)) from error
     except RateLimitedError as error:
         raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, str(error), headers={'Retry-After': '60'}) from error
+    except NoNumbersError as error:
+        # 503 with Retry-After: temporary and worth retrying, unlike a 400.
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE, str(error), headers={'Retry-After': '60'},
+        ) from error
     except PhoneAuthError as error:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(error)) from error
     except Exception as error:

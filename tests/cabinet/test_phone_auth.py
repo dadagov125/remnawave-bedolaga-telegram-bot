@@ -20,7 +20,7 @@ from app.cabinet.auth.flashcall import (
 )
 from app.config import settings
 from app.external.flashcall import get_provider, list_providers
-from app.external.flashcall.base import VerificationStatus
+from app.external.flashcall.base import NoNumbersAvailableError, VerificationStatus
 from app.external.flashcall.mock import MockProvider
 
 
@@ -205,3 +205,47 @@ def test_phone_oauth_wrapper_is_registered(registered_paths):
     assert 'GET' in registered_paths['/cabinet/auth/oauth/phone/authorize']
     assert 'GET' in registered_paths['/cabinet/auth/oauth/phone/page']
     assert 'POST' in registered_paths['/cabinet/auth/oauth/phone/callback']
+
+
+# ── provider pool exhaustion ─────────────────────────────────────
+@pytest.mark.asyncio
+async def test_start_maps_pool_exhaustion_to_its_own_error(monkeypatch):
+    """Numbers come from a shared pool, so exhaustion is routine under load.
+
+    It must surface as its own error (-> 503 + Retry-After) rather than a generic
+    failure, otherwise the user is told "service unavailable" when the honest
+    answer is "all lines busy, try in a minute".
+    """
+    from app.cabinet.auth import flashcall as service
+
+    db = AsyncMock()
+    db.execute.return_value = SimpleNamespace(scalar_one_or_none=lambda: None)  # no live check
+    monkeypatch.setattr(service, '_check_rate_limits', AsyncMock())
+    stub = SimpleNamespace(
+        name='stub',
+        create=AsyncMock(side_effect=NoNumbersAvailableError('pool empty')),
+    )
+    monkeypatch.setattr(service, 'get_provider', lambda *_: stub)
+
+    with pytest.raises(service.NoNumbersError):
+        await service.start_verification(db, '+79991234567', ip='127.0.0.1')
+
+
+@pytest.mark.asyncio
+async def test_start_reuses_a_live_check(monkeypatch):
+    """A second request for the same number must not grab another pool number."""
+    from app.cabinet.auth import flashcall as service
+
+    live = _attempt(dial_number='+74990000000', expires_at=datetime.now(UTC) + timedelta(seconds=40))
+    db = AsyncMock()
+    db.execute.return_value = SimpleNamespace(scalar_one_or_none=lambda: live)
+    create = AsyncMock()
+    monkeypatch.setattr(service, 'get_provider', lambda *_: SimpleNamespace(name='stub', create=create))
+    monkeypatch.setattr(service, '_check_rate_limits', AsyncMock())
+
+    attempt, dial, left = await service.start_verification(db, '+79991234567', ip='127.0.0.1')
+
+    assert attempt is live
+    assert dial == '+74990000000'
+    assert 0 < left <= 40
+    create.assert_not_awaited()  # provider untouched — the point of the reuse
