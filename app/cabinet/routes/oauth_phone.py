@@ -1,20 +1,20 @@
 """Phone login wired into the cabinet's OAuth flow — without touching the frontend.
 
-The cabinet's login page builds its provider buttons from ``GET /oauth/providers``
+The cabinet's login page builds its provider buttons from ``GET /auth/oauth/providers``
 and, on click, walks the usual OAuth dance: fetch an authorize URL, redirect the
-browser there, then hand ``code`` + ``state`` back to ``/oauth/<provider>/callback``.
+browser there, then hand ``code`` + ``state`` back to ``/auth/oauth/<provider>/callback``.
 
 Phone verification is not OAuth, but it fits that dance exactly, so we reuse it:
 
-    /oauth/phone/authorize  -> URL of a page WE serve (number input + countdown)
-    /oauth/phone/page       -> that page
-    /oauth/phone/callback   -> exchanges a one-time code for a session
+    /auth/oauth/phone/authorize  -> URL of a page WE serve (number input + countdown)
+    /auth/oauth/phone/page       -> that page
+    /auth/oauth/phone/callback   -> exchanges a one-time code for a session
 
 Why this file instead of extending the existing OAuth routes: their provider
 argument is a ``Literal`` guarded by a start-up check that it matches the OAuth
 account-link columns in the database. Adding 'phone' there would mean inventing a
 column for something that is not an account link. Registering these literal paths
-*before* the parameterised ``/oauth/{provider}/...`` router keeps upstream files
+*before* the parameterised ``/auth/oauth/{provider}/...`` router keeps upstream files
 untouched — FastAPI matches routes in registration order.
 
 The browser never learns which service places the calls: it only ever sees our
@@ -24,7 +24,7 @@ own opaque identifiers.
 import secrets
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -40,7 +40,10 @@ from .auth import _create_auth_response, _store_refresh_token
 
 logger = structlog.get_logger(__name__)
 
-router = APIRouter(prefix='/oauth/phone', tags=['Cabinet Phone Auth'])
+# Префикс обязан совпадать с OAuth-роутером кабинета ('/auth/oauth'), иначе
+# фронтенд позовёт /auth/oauth/phone/authorize и попадёт в параметризованный
+# роут, который наш литерал не знает и ответит 422.
+router = APIRouter(prefix='/auth/oauth/phone', tags=['Cabinet Phone Auth'])
 
 #: One-time codes are short-lived: they only have to survive a redirect.
 EXCHANGE_TTL_SECONDS = 120
@@ -62,14 +65,22 @@ class CallbackBody(BaseModel):
 
 
 @router.get('/authorize', response_model=AuthorizeResponse)
-async def authorize(request: Request):
-    """Hand the cabinet the URL of our number-entry page."""
+async def authorize():
+    """Hand the cabinet the URL of our number-entry page.
+
+    Built from ``CABINET_URL``, not from the incoming request: behind nginx the
+    request sees plain http and no ``/api`` prefix, so a URL derived from it
+    lands in the SPA instead of the bot.
+
+    Serving the page on the cabinet's own origin (through its ``/api`` proxy)
+    also removes the cross-origin hop entirely — the final redirect back to
+    ``/auth/oauth/callback`` becomes a same-origin one.
+    """
     _ensure_enabled()
     state = secrets.token_urlsafe(24)
-
-    base = str(request.base_url).rstrip('/')
+    base = (settings.CABINET_URL or '').rstrip('/')
     return AuthorizeResponse(
-        authorize_url=f'{base}/cabinet/oauth/phone/page?state={state}',
+        authorize_url=f'{base}/api/cabinet/auth/oauth/phone/page?state={state}',
         state=state,
     )
 
@@ -165,7 +176,6 @@ _PAGE = r"""<!doctype html>
 <script>
 const qs = new URLSearchParams(location.search);
 const state = qs.get('state') || '';
-const CABINET = "__CABINET_URL__";
 let sessionId = null, timer = null;
 
 async function post(url, body) {
@@ -177,7 +187,7 @@ async function post(url, body) {
 document.getElementById('go').onclick = async () => {
   const btn = document.getElementById('go'); const err = document.getElementById('err1');
   err.textContent = ''; btn.disabled = true;
-  const {status, data} = await post('/cabinet/auth/phone/call',
+  const {status, data} = await post('/api/cabinet/auth/phone/call',
                                     {phone: document.getElementById('phone').value});
   btn.disabled = false;
   if (status !== 200) { err.textContent = data.detail || 'Не удалось начать проверку'; return; }
@@ -206,10 +216,11 @@ function startCountdown(seconds) {
 
 async function poll() {
   // Опрос каждые 2 секунды: окно всего минута, чаще незачем, реже — потеряем время.
-  const {status, data} = await post('/cabinet/oauth/phone/exchange', {session_id: sessionId, state});
+  const {status, data} = await post('/api/cabinet/auth/oauth/phone/exchange', {session_id: sessionId, state});
   if (status === 200 && data.code) {
     clearInterval(timer);
-    location.href = CABINET + '/auth/oauth/callback?code=' + encodeURIComponent(data.code) +
+    // Относительный путь: страница и кабинет на одном origin.
+    location.href = '/auth/oauth/callback?code=' + encodeURIComponent(data.code) +
                     '&state=' + encodeURIComponent(state);
     return;
   }
@@ -226,9 +237,10 @@ async function poll() {
 
 @router.get('/page', response_class=HTMLResponse)
 async def page():
-    """Number entry and countdown. Served by the bot: the cabinet frontend stays
-    untouched, and the page only ever talks to our own endpoints.
+    """Number entry and countdown.
+
+    Served by the bot but reachable on the cabinet's origin through its ``/api``
+    proxy, so the frontend stays untouched and nothing crosses origins.
     """
     _ensure_enabled()
-    cabinet_url = (settings.CABINET_URL or '').rstrip('/')
-    return HTMLResponse(_PAGE.replace('__CABINET_URL__', cabinet_url))
+    return HTMLResponse(_PAGE)
