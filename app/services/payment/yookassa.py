@@ -1514,12 +1514,43 @@ class YooKassaPaymentMixin:
         if payment.status == 'succeeded' and payment.is_paid:
             return await self._process_successful_yookassa_payment(db, payment, event_object=event_object)
 
+        if payment.status == 'canceled':
+            # Гостевая покупка остаётся pending до бесконечности, если её никто
+            # не закрыл: страница результата продолжает крутить «ожидание
+            # оплаты», хотя платить уже никто не собирается. Помечаем неудачной,
+            # чтобы человек увидел статус и мог начать заново.
+            await self._fail_guest_purchase_for_canceled_payment(db, event_object)
+
         logger.info(
             'Webhook YooKassa обновил платеж до статуса',
             yookassa_payment_id=yookassa_payment_id,
             payment_status=payment.status,
         )
         return True
+
+    async def _fail_guest_purchase_for_canceled_payment(
+        self,
+        db: AsyncSession,
+        event_object: dict[str, Any],
+    ) -> None:
+        """Пометить гостевую покупку неудачной после отмены платежа."""
+        from app.database.crud.landing import get_purchase_by_token, update_purchase_status
+        from app.database.models import GuestPurchaseStatus
+        from app.services.payment.common import _extract_guest_purchase_token
+
+        token = _extract_guest_purchase_token(event_object.get('metadata'))
+        if not token:
+            return
+
+        purchase = await get_purchase_by_token(db, token)
+        # Закрываем только то, что ещё ждёт оплаты: оплаченную покупку отменённый
+        # платёж догнать не должен — деньги могли прийти другим способом.
+        if purchase is None or purchase.status != GuestPurchaseStatus.PENDING.value:
+            return
+
+        await update_purchase_status(db, token, GuestPurchaseStatus.FAILED)
+        await db.commit()
+        logger.info('Гостевая покупка помечена неудачной после отмены платежа', purchase_token=token)
 
     async def _restore_missing_yookassa_payment(
         self,
