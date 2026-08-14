@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.cabinet.auth.flashcall import InvalidPhoneError, normalize_phone
 from app.cabinet.dependencies import get_cabinet_db
 from app.cabinet.ip_utils import get_client_ip
 from app.cabinet.utils.locale import DEFAULT_LOCALE, resolve_locale_text
@@ -121,16 +122,31 @@ def _validate_contact(contact_type: str, contact_value: str) -> None:
         raise ValueError('Invalid email format')
     if contact_type == 'telegram' and not _TELEGRAM_RE.match(contact_value):
         raise ValueError('Invalid Telegram username format')
+    if contact_type == 'phone':
+        # Тот же нормализатор, что и на входе по звонку: номер должен попасть в
+        # базу в E.164, иначе покупка по «8 999…» и вход по «+7 999…» создадут
+        # два разных аккаунта на один телефон.
+        try:
+            normalize_phone(contact_value)
+        except InvalidPhoneError as error:
+            raise ValueError(str(error)) from error
+
+
+def _normalized_contact(contact_type: str, contact_value: str) -> str:
+    """Хранимое значение контакта: телефон приводим к E.164, остальное — как есть."""
+    if contact_type == 'phone':
+        return normalize_phone(contact_value)
+    return contact_value.strip()
 
 
 class PurchaseRequest(BaseModel):
     tariff_id: int
     period_days: int
-    contact_type: str = Field(pattern=r'^(email|telegram)$')
+    contact_type: str = Field(pattern=r'^(email|telegram|phone)$')
     contact_value: str = Field(min_length=1, max_length=255)
     payment_method: str = Field(min_length=1, max_length=50, pattern=r'^[a-z0-9_]+$')
     is_gift: bool = False
-    gift_recipient_type: str | None = Field(default=None, pattern=r'^(email|telegram)$')
+    gift_recipient_type: str | None = Field(default=None, pattern=r'^(email|telegram|phone)$')
     gift_recipient_value: str | None = Field(default=None, max_length=255)
     gift_message: str | None = Field(default=None, max_length=1000)
     yandex_cid: str | None = Field(default=None, max_length=128, pattern=r'^[A-Za-z0-9._:-]{4,128}$')
@@ -811,11 +827,15 @@ async def create_landing_purchase(
         period_days=body.period_days,
         amount_kopeks=amount_kopeks,
         contact_type=body.contact_type,
-        contact_value=body.contact_value,
+        contact_value=_normalized_contact(body.contact_type, body.contact_value),
         payment_method=body.payment_method,
         is_gift=body.is_gift,
         gift_recipient_type=body.gift_recipient_type,
-        gift_recipient_value=body.gift_recipient_value,
+        gift_recipient_value=(
+            _normalized_contact(body.gift_recipient_type, body.gift_recipient_value)
+            if body.gift_recipient_type and body.gift_recipient_value
+            else body.gift_recipient_value
+        ),
         gift_message=body.gift_message,
         subid=body.subid,
         referrer=body.referrer,

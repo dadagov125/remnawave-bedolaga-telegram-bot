@@ -10,6 +10,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.cabinet.auth.flashcall import InvalidPhoneError, normalize_phone
 from app.config import settings
 from app.database.crud.system_setting import get_setting_value
 from app.database.crud.tariff import get_tariff_by_id
@@ -243,6 +244,16 @@ async def create_gift_purchase(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail='Invalid Telegram username format',
             )
+        if body.recipient_type == 'phone':
+            # Приводим к E.164 тем же нормализатором, что и вход по звонку:
+            # иначе «8 999…» и «+7 999…» разъедутся в разные аккаунты.
+            try:
+                body.recipient_value = normalize_phone(body.recipient_value)
+            except InvalidPhoneError as error:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=str(error),
+                ) from error
 
         # Prevent self-gift
         if body.recipient_type == 'telegram':
@@ -254,6 +265,12 @@ async def create_gift_purchase(
                 )
         elif body.recipient_type == 'email':
             if user.email and user.email.lower() == body.recipient_value.lower():
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail='Cannot gift to yourself',
+                )
+        elif body.recipient_type == 'phone':
+            if user.phone and user.phone == body.recipient_value:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail='Cannot gift to yourself',

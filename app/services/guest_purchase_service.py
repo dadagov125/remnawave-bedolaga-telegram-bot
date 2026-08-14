@@ -11,6 +11,7 @@ from sqlalchemy import func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.cabinet.auth.flashcall import mask_phone, normalize_phone
 from app.cabinet.auth.jwt_handler import create_auto_login_token
 from app.cabinet.auth.password_utils import hash_password
 from app.config import settings
@@ -23,7 +24,12 @@ from app.database.crud.subscription import (
 )
 from app.database.crud.tariff import get_tariff_by_id
 from app.database.crud.transaction import create_transaction
-from app.database.crud.user import _get_or_create_default_promo_group, create_unique_referral_code
+from app.database.crud.user import (
+    _get_or_create_default_promo_group,
+    create_unique_referral_code,
+    create_user_by_phone,
+    get_user_by_phone,
+)
 from app.database.models import (
     GuestPurchase,
     GuestPurchaseStatus,
@@ -675,7 +681,7 @@ def _mask_email(email: str) -> str:
 
 async def _find_or_create_user(
     db: AsyncSession,
-    contact_type: Literal['email', 'telegram'],
+    contact_type: Literal['email', 'telegram', 'phone'],
     contact_value: str,
     purchase: GuestPurchase | None = None,
     pre_resolved_telegram_id: int | None = None,
@@ -773,6 +779,38 @@ async def _find_or_create_user(
             'Created new email user with cabinet account for guest purchase',
             user_id=user.id,
             email_masked=_mask_email(contact_value),
+        )
+        return user, True
+
+    if contact_type == 'phone':
+        # Вход по номеру подтверждается звонком, пароль не нужен и не создаётся.
+        # Ссылку на подписку покупатель забирает со страницы результата и в
+        # кабинете: SMS мы не шлём, отправить её больше некуда.
+        phone = normalize_phone(contact_value)
+        user = await get_user_by_phone(db, phone)
+        if user is not None:
+            if not user.promo_group_id:
+                default_group = await _get_or_create_default_promo_group(db)
+                user.promo_group_id = default_group.id
+            if not user.referral_code:
+                user.referral_code = await create_unique_referral_code(db)
+            return user, False
+
+        try:
+            async with db.begin_nested():
+                user = await create_user_by_phone(db, phone, verified=False)
+        except IntegrityError:
+            # Гонка: тот же номер завели параллельно (например, вошли по звонку
+            # во второй вкладке, пока шла оплата).
+            user = await get_user_by_phone(db, phone)
+            if user is None:
+                raise
+            return user, False
+
+        logger.info(
+            'Created new phone user for guest purchase',
+            user_id=user.id,
+            phone_masked=mask_phone(phone),
         )
         return user, True
 

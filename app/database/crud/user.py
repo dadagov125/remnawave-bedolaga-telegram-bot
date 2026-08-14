@@ -1414,12 +1414,15 @@ async def create_user_by_phone(
     phone: str,
     language: str = 'ru',
     referred_by_id: int | None = None,
+    verified: bool = True,
 ) -> User:
     """Create a user registered by phone number (no Telegram, no email).
 
-    Mirrors :func:`create_user_by_email`. The number is stored already verified:
-    the account only exists because an incoming call from that exact number was
-    confirmed, so there is nothing left to verify afterwards.
+    Mirrors :func:`create_user_by_email`. При входе звонком номер сразу
+    подтверждён — аккаунт и существует-то потому, что звонок с этого номера
+    состоялся. А при гостевой покупке на лендинге номер только введён в форму:
+    владение им никто не доказывал, поэтому вызывающий передаёт
+    ``verified=False``, и отметка ставится позже, при первом входе звонком.
     """
     referral_code = await create_unique_referral_code(db)
     normalized_language = _normalize_language_code(language)
@@ -1429,8 +1432,8 @@ async def create_user_by_phone(
         telegram_id=None,
         auth_type='phone',
         phone=phone,
-        phone_verified=True,
-        phone_verified_at=datetime.now(UTC),
+        phone_verified=verified,
+        phone_verified_at=datetime.now(UTC) if verified else None,
         username=None,
         first_name=None,
         last_name=None,

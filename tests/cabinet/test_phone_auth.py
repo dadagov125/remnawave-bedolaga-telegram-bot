@@ -533,3 +533,63 @@ def test_linked_providers_list_has_no_duplicate_phone(monkeypatch):
 
     assert providers.count('phone') == 1
     assert len(providers) == len(set(providers))
+
+
+# ── покупка на лендинге по номеру ────────────────────────────────
+def test_landing_contact_is_normalized_to_e164():
+    """Покупка по «8 999…» и вход по «+7 999…» должны попасть в один аккаунт.
+
+    Номер сохраняется в E.164 — иначе на один телефон завелось бы два
+    пользователя, и покупатель не увидел бы свою покупку после входа.
+    """
+    from app.cabinet.routes.landing import _normalized_contact
+
+    assert _normalized_contact('phone', '8 999 123-45-67') == '+79991234567'
+    assert _normalized_contact('phone', '+7 (999) 123 45 67') == '+79991234567'
+    # Остальные типы не трогаем, только подрезаем пробелы.
+    assert _normalized_contact('email', ' a@b.ru ') == 'a@b.ru'
+
+
+def test_landing_rejects_non_russian_phone():
+    from app.cabinet.routes.landing import _validate_contact
+
+    with pytest.raises(ValueError):
+        _validate_contact('phone', '+1 202 555 0143')
+
+
+@pytest.mark.asyncio
+async def test_phone_from_landing_is_not_verified_until_the_call(monkeypatch):
+    """Введённый в форму номер владением не доказан.
+
+    Отмечать его подтверждённым сразу нельзя: человек мог ошибиться цифрой, а
+    подтверждённый номер — это полноценный способ входа в чужой аккаунт.
+    """
+    from app.database.crud import user as user_crud
+
+    created = {}
+
+    class _Session:
+        def add(self, obj):
+            created['user'] = obj
+
+        async def flush(self):
+            pass
+
+        async def refresh(self, obj):
+            pass
+
+        async def commit(self):
+            pass
+
+    from app.database.models import PromoGroup
+
+    monkeypatch.setattr(user_crud, 'create_unique_referral_code', AsyncMock(return_value='CODE'))
+    monkeypatch.setattr(
+        user_crud, '_get_or_create_default_promo_group', AsyncMock(return_value=PromoGroup(id=1, name='default')),
+    )
+
+    await user_crud.create_user_by_phone(_Session(), '+79991234567', verified=False)
+
+    assert created['user'].phone == '+79991234567'
+    assert created['user'].phone_verified is False
+    assert created['user'].phone_verified_at is None

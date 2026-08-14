@@ -53,7 +53,7 @@ class GiftConfigResponse(BaseModel):
 class GiftPurchaseRequest(BaseModel):
     tariff_id: int = Field(gt=0)
     period_days: int = Field(gt=0, le=3650)
-    recipient_type: str | None = Field(default=None, pattern=r'^(email|telegram)$')
+    recipient_type: str | None = Field(default=None, pattern=r'^(email|telegram|phone)$')
     recipient_value: str | None = Field(default=None, max_length=255)
     gift_message: str | None = Field(default=None, max_length=1000)
     payment_mode: str = Field(pattern=r'^(balance|gateway)$')

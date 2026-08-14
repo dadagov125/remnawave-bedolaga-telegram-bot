@@ -155,6 +155,12 @@ async def check_call_verification(
     if user is None:
         user = await create_user_by_phone(db, phone)
         logger.info('Cabinet user registered by phone', user_id=user.id, phone=mask_phone(phone))
+    elif not user.phone_verified:
+        # Номер мог попасть в аккаунт из гостевой покупки на лендинге, где его
+        # просто ввели в форму. Звонок только что доказал владение — отмечаем.
+        user.phone_verified = True
+        user.phone_verified_at = datetime.now(UTC)
+        logger.info('Phone confirmed by call for existing account', user_id=user.id)
 
     response = await _create_auth_response(user, db)
     await _store_refresh_token(db, user.id, response.refresh_token)
