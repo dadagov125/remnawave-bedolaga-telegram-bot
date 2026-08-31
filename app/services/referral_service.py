@@ -14,6 +14,7 @@ from app.database.models import ReferralEarning, TransactionType, User
 from app.services.notification_delivery_service import (
     notification_delivery_service,
 )
+from app.utils.user_identity import user_identifier
 from app.utils.user_utils import get_effective_referral_commission_percent
 
 
@@ -852,7 +853,7 @@ async def process_referral_topup(db: AsyncSession, user_id: int, topup_amount_ko
                         campaign_id=campaign_id,
                     )
 
-                    referrer_id = referrer.telegram_id or referrer.email or f'user#{referrer.id}'
+                    referrer_id = user_identifier(referrer, fallback_prefix='user#')
                     logger.info(
                         '💰 Реферер получил бонус ₽', referrer_id=referrer_id, inviter_bonus=inviter_bonus / 100
                     )
@@ -918,7 +919,7 @@ async def process_referral_topup(db: AsyncSession, user_id: int, topup_amount_ko
                     campaign_id=campaign_id,
                 )
 
-                referrer_id = referrer.telegram_id or referrer.email or f'user#{referrer.id}'
+                referrer_id = user_identifier(referrer, fallback_prefix='user#')
                 logger.info(
                     '💰 Комиссия с пополнения: получил ₽',
                     referrer_id=referrer_id,
@@ -1001,7 +1002,7 @@ async def process_referral_purchase(
                 campaign_id=campaign_id,
             )
 
-            referrer_id = referrer.telegram_id or referrer.email or f'user#{referrer.id}'
+            referrer_id = user_identifier(referrer, fallback_prefix='user#')
             logger.info(
                 '💰 Комиссия с покупки: получил ₽', referrer_id=referrer_id, commission_amount=commission_amount / 100
             )

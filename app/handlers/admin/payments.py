@@ -22,6 +22,7 @@ from app.services.payment_verification_service import (
 )
 from app.utils.decorators import admin_required, error_handler
 from app.utils.formatters import format_datetime, format_time_ago, format_username
+from app.utils.user_identity import user_identifier
 
 
 logger = structlog.get_logger(__name__)
@@ -336,7 +337,7 @@ def _format_user_line(user: User | None) -> str:
     if user is None:
         return '👤 Гость (покупка с лендинга)'
     username = format_username(user.username, user.telegram_id, user.full_name)
-    user_id_display = user.telegram_id or user.email or f'#{user.id}'
+    user_id_display = user_identifier(user)
     return f'👤 {html.escape(username)} (<code>{user_id_display}</code>)'
 
 

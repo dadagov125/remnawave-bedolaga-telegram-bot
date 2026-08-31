@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.database.models import AdvertisingCampaignRegistration, ReferralEarning, Subscription, SubscriptionStatus, User
+from app.utils.user_identity import user_identifier
 
 
 logger = structlog.get_logger(__name__)
@@ -152,9 +153,15 @@ async def get_referral_statistics(db: AsyncSession) -> dict:
     top_referrers = []
     for referrer_id, stats in sorted_referrers[:5]:
         user_result = await db.execute(
-            select(User.id, User.username, User.first_name, User.last_name, User.telegram_id).where(
-                User.id == referrer_id
-            )
+            select(
+                User.id,
+                User.username,
+                User.first_name,
+                User.last_name,
+                User.telegram_id,
+                User.phone,
+                User.email,
+            ).where(User.id == referrer_id)
         )
         user = user_result.first()
 
@@ -169,14 +176,16 @@ async def get_referral_statistics(db: AsyncSession) -> dict:
             elif user.telegram_id:
                 display_name = f'ID{user.telegram_id}'
             else:
-                display_name = user.email or f'#{user.id}'
+                display_name = user_identifier(user)
 
             top_referrers.append(
                 {
                     'user_id': user.id,  # Use internal ID, not telegram_id
                     'display_name': display_name,
                     'username': user.username,
-                    'telegram_id': user.telegram_id,  # Can be None for email users
+                    'telegram_id': user.telegram_id,  # None у входа по звонку и по почте
+                    'phone': user.phone,
+                    'email': user.email,
                     'total_earned_kopeks': stats['total_earned'],
                     'referrals_count': stats['referrals_count'],
                 }
@@ -297,9 +306,15 @@ async def get_top_referrers_by_period(
     result = []
     for data in top_data:
         user_result = await db.execute(
-            select(User.id, User.username, User.first_name, User.last_name, User.telegram_id).where(
-                User.id == data['referrer_id']
-            )
+            select(
+                User.id,
+                User.username,
+                User.first_name,
+                User.last_name,
+                User.telegram_id,
+                User.phone,
+                User.email,
+            ).where(User.id == data['referrer_id'])
         )
         user = user_result.first()
 
@@ -314,12 +329,14 @@ async def get_top_referrers_by_period(
             elif user.telegram_id:
                 display_name = f'ID{user.telegram_id}'
             else:
-                display_name = user.email or f'#{user.id}'
+                display_name = user_identifier(user)
 
             result.append(
                 {
                     'user_id': user.id,
-                    'telegram_id': user.telegram_id,  # Can be None for email users
+                    'telegram_id': user.telegram_id,  # None у входа по звонку и по почте
+                    'phone': user.phone,
+                    'email': user.email,
                     'username': user.username,
                     'display_name': display_name,
                     'invited_count': data['invited_count'],

@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database.models import User
 from app.services.backup_service import backup_service
 from app.utils.decorators import admin_required, error_handler
+from app.utils.user_identity import user_identifier
 
 
 logger = structlog.get_logger(__name__)
@@ -144,7 +145,7 @@ async def create_backup_handler(callback: types.CallbackQuery, db_user: User, db
     )
 
     # Создаем бекап
-    created_by_id = db_user.telegram_id or db_user.email or f'#{db_user.id}'
+    created_by_id = user_identifier(db_user)
     success, message, file_path = await backup_service.create_backup(created_by=created_by_id, compress=True)
 
     if success:

@@ -26,6 +26,7 @@ from app.localization.texts import get_texts
 from app.states import AdminStates
 from app.utils.decorators import admin_required, error_handler
 from app.utils.pricing_utils import format_period_description
+from app.utils.user_identity import user_identifier
 
 
 logger = structlog.get_logger(__name__)
@@ -1227,7 +1228,7 @@ async def show_promo_group_members(
                 tg_display = str(user.telegram_id)
             else:
                 user_link = f'<b>{safe_name}</b>'
-                tg_display = user.email or f'#{user.id}'
+                tg_display = user_identifier(user)
             lines.append(f'{index}. {user_link} (ID {user.id}, {username}, TG {tg_display})')
         body = '\n'.join(lines)
 

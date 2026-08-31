@@ -55,6 +55,7 @@ from app.database.models import (
 )
 from app.external.remnawave_api import RemnaWaveInvalidUserIdError
 from app.services.remnawave_service import RemnaWaveService
+from app.utils.user_identity import user_identifier
 
 
 logger = structlog.get_logger(__name__)
@@ -316,7 +317,7 @@ class BlockedUsersService:
                 logger.warning('Пользователь не найден в БД', user_id=user_id)
                 return False
 
-            user_display = user.telegram_id or user.email or f'#{user.id}'
+            user_display = user_identifier(user)
 
             # Best-effort: stop Platega SBP autopay for every subscription of
             # this user before anything is deleted — the platega_subscriptions

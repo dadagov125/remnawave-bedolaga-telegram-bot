@@ -43,6 +43,7 @@ from app.utils.subscription_utils import (
     resolve_hwid_device_limit_for_payload,
 )
 from app.utils.timezone import get_local_timezone
+from app.utils.user_identity import user_identifier
 
 
 logger = structlog.get_logger(__name__)
@@ -3233,7 +3234,7 @@ class RemnaWaveService:
                 or any(not sub.is_trial for sub in user_subscriptions)
                 or user.balance_kopeks > 0
             )
-            user_id_display = user.telegram_id or user.email or f'#{user.id}'
+            user_id_display = user_identifier(user)
             if was_paid:
                 logger.warning(
                     '⚠️ ВНИМАНИЕ: force_cleanup_user_data вызвана для ПЛАТНОГО пользователя',

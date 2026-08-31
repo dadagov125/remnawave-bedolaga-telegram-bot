@@ -21,6 +21,7 @@ from app.services.support_settings_service import SupportSettingsService
 from app.states import AdminTicketStates
 from app.utils.cache import RateLimitCache
 from app.utils.photo_message import safe_edit_or_resend
+from app.utils.user_identity import user_identifier
 
 
 logger = structlog.get_logger(__name__)
@@ -234,9 +235,7 @@ async def view_admin_ticket(
     }.get(ticket.status, ticket.status)
 
     user_name = html.escape(ticket.user.full_name) if ticket.user else 'Unknown'
-    telegram_id_display = (
-        html.escape(str(ticket.user.telegram_id or ticket.user.email or f'#{ticket.user.id}')) if ticket.user else '—'
-    )
+    telegram_id_display = html.escape(str(user_identifier(ticket.user))) if ticket.user else '—'
     username_value = ticket.user.username if ticket.user else None
     id_label = 'Telegram ID' if (ticket.user and ticket.user.telegram_id) else 'ID'
 
@@ -841,10 +840,11 @@ async def handle_admin_block_duration_input(message: types.Message, state: FSMCo
                     chat_link = f'tg://user?id={int(updated.user.telegram_id)}'
                     ticket_text += f'🔗 Чат по ID: <a href="{chat_link}">{chat_link}</a>\n'
             elif updated.user:
-                # Email-only user
-                user_id_display = html.escape(str(updated.user.email or f'#{updated.user.id}'))
+                # Аккаунт без Telegram: вход по звонку или по почте.
+                user_id_display = html.escape(user_identifier(updated.user))
                 ticket_text += f'🆔 ID: <code>{user_id_display}</code>\n'
-                ticket_text += '📧 Тип: Email-пользователь\n'
+                account_kind = '📞 Тип: Вход по номеру' if updated.user.phone else '📧 Тип: Email-пользователь'
+                ticket_text += f'{account_kind}\n'
             ticket_text += '\n'
             if updated.is_user_reply_blocked:
                 if updated.user_reply_block_permanent:

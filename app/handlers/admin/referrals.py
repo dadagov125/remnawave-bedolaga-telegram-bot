@@ -20,6 +20,7 @@ from app.localization.texts import get_texts
 from app.services.referral_withdrawal_service import referral_withdrawal_service
 from app.states import AdminStates
 from app.utils.decorators import admin_required, error_handler
+from app.utils.user_identity import user_identifier
 
 
 logger = structlog.get_logger(__name__)
@@ -214,9 +215,12 @@ async def _show_top_referrers_filtered(callback: types.CallbackQuery, db: AsyncS
                 display_name = referrer.get('display_name', 'N/A')
                 username = referrer.get('username', '')
                 telegram_id = referrer.get('telegram_id')
+                user_phone = referrer.get('phone', '')
                 user_email = referrer.get('email', '')
                 user_id = referrer.get('user_id', '')
-                id_display = telegram_id or user_email or f'#{user_id}' if user_id else 'N/A'
+                # Здесь строки — словари из CRUD, а не User, поэтому общий
+                # user_identifier не подходит; порядок тот же.
+                id_display = telegram_id or user_phone or user_email or f'#{user_id}' if user_id else 'N/A'
 
                 if username:
                     display_text = f'@{html.escape(username)} (ID{id_display})'
@@ -361,7 +365,7 @@ async def view_withdrawal_request(callback: types.CallbackQuery, db_user: User, 
 
     user = await get_user_by_id(db, request.user_id)
     user_name = html.escape(user.full_name) if user and user.full_name else 'Неизвестно'
-    user_tg_id = (user.telegram_id or user.email or f'#{user.id}') if user else 'N/A'
+    user_tg_id = user_identifier(user) if user else 'N/A'
 
     analysis = json.loads(request.risk_analysis) if request.risk_analysis else {}
 

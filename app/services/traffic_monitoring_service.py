@@ -18,6 +18,7 @@ from app.external.remnawave_api import RemnaWaveUser, UserStatus
 from app.services.admin_notification_service import AdminNotificationService
 from app.services.remnawave_service import RemnaWaveService
 from app.utils.cache import cache, cache_key
+from app.utils.user_identity import user_identifier
 
 
 logger = structlog.get_logger(__name__)
@@ -778,7 +779,7 @@ class TrafficMonitoringServiceV2:
                 async with AsyncSessionLocal() as db:
                     db_user = await get_user_by_remnawave_id(db, violation.user_id)
                     if db_user:
-                        user_id_display = db_user.telegram_id or db_user.email or f'#{db_user.id}'
+                        user_id_display = user_identifier(db_user)
                         user_info = f'👤 <b>{html.escape(db_user.full_name or "Без имени")}</b>\n🆔 ID: <code>{user_id_display}</code>\n'
                         if db_user.username:
                             user_info += f'📱 Username: @{html.escape(db_user.username)}\n'

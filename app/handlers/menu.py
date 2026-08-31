@@ -45,6 +45,7 @@ from app.utils.promo_offer import (
 from app.utils.rich_menu import try_edit_rich_main_menu
 from app.utils.telegram_html import html_to_telegram, info_page_faq_to_telegram, split_telegram_text
 from app.utils.timezone import format_local_datetime
+from app.utils.user_identity import user_identifier
 
 
 logger = structlog.get_logger(__name__)
@@ -1707,7 +1708,7 @@ async def handle_activate_button(callback: types.CallbackQuery, db_user: User, d
             )
 
     except Exception as e:
-        user_id_display = db_user.telegram_id or db_user.email or f'#{db_user.id}'
+        user_id_display = user_identifier(db_user)
         logger.error('Ошибка автоматической активации для', user_id_display=user_id_display, error=e)
         await db.rollback()
         await callback.answer(

@@ -26,6 +26,7 @@ from app.utils.cache import RateLimitCache, cache, cache_key
 from app.utils.miniapp_buttons import build_admin_ticket_cabinet_button
 from app.utils.photo_message import edit_or_answer_photo
 from app.utils.timezone import format_local_datetime
+from app.utils.user_identity import user_identifier
 
 
 logger = structlog.get_logger(__name__)
@@ -1052,7 +1053,7 @@ async def notify_admins_about_new_ticket(ticket: Ticket, db: AsyncSession):
         except Exception:
             user = None
         full_name = html.escape(user.full_name or '') if user else 'Unknown'
-        telegram_id_display = (user.telegram_id or user.email or f'#{user.id}') if user else '—'
+        telegram_id_display = user_identifier(user) if user else '—'
         username_display = html.escape((user.username or 'отсутствует') if user else 'отсутствует')
 
         # Загружаем первое сообщение для получения медиа и превью текста
@@ -1129,7 +1130,7 @@ async def notify_admins_about_ticket_reply(
         except Exception:
             user = None
         full_name = html.escape(user.full_name or '') if user else 'Unknown'
-        telegram_id_display = (user.telegram_id or user.email or f'#{user.id}') if user else '—'
+        telegram_id_display = user_identifier(user) if user else '—'
         username_display = html.escape((user.username or 'отсутствует') if user else 'отсутствует')
 
         reply_preview = reply_text[:200] + '...' if len(reply_text) > 200 else reply_text

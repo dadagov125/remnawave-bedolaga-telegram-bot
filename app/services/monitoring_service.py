@@ -70,6 +70,7 @@ from app.utils.subscription_utils import (
     resolve_hwid_device_limit_for_payload,
 )
 from app.utils.timezone import format_local_datetime
+from app.utils.user_identity import user_identifier
 
 
 def resolve_autopay_period_candidate(candidate, tariff) -> int | None:
@@ -761,7 +762,7 @@ class MonitoringService:
 
                     # Use user.id + subscription.id for key to support multiple subscriptions per user
                     sub_key = f'user_{user.id}_sub_{subscription.id}_today'
-                    user_identifier = user.telegram_id or f'email:{user.id}'
+                    user_log_id = user_identifier(user)
 
                     if (
                         await notification_sent(db, user.id, subscription.id, 'expiring', days)
@@ -769,7 +770,7 @@ class MonitoringService:
                     ):
                         logger.debug(
                             'Уведомление уже отправлено, пропускаем',
-                            user_identifier=user_identifier,
+                            user_identifier=user_log_id,
                             days=days,
                         )
                         continue
@@ -785,7 +786,7 @@ class MonitoringService:
                                 logger.debug(
                                     '🎯 Пропускаем уведомление на дней для пользователя есть более срочное на дней',
                                     days=days,
-                                    user_identifier=user_identifier,
+                                    user_identifier=user_log_id,
                                     other_days=other_days,
                                 )
                                 break
@@ -1501,7 +1502,7 @@ class MonitoringService:
                     if not user:
                         continue
 
-                    user_identifier = user.telegram_id or f'email:{user.id}'
+                    user_log_id = user_identifier(user)
 
                     # Период продления выбирается с такой иерархией:
                     #   1. subscription.autopay_period_days — выбор пользователя/админа
@@ -1713,7 +1714,7 @@ class MonitoringService:
                             self._notified_users.add(autopay_key)
                             logger.info(
                                 '💳 Автопродление подписки пользователя успешно (списано , скидка %)',
-                                user_identifier=user_identifier,
+                                user_identifier=user_log_id,
                                 charge_amount=charge_amount,
                                 promo_discount_percent=promo_discount_percent,
                             )
@@ -1724,14 +1725,14 @@ class MonitoringService:
                             )
                             logger.warning(
                                 '💳 Ошибка списания средств для автопродления пользователя',
-                                user_identifier=user_identifier,
+                                user_identifier=user_log_id,
                             )
                     else:
                         failed_count += 1
                         await self._maybe_notify_autopay_failure(user, charge_amount, subscription, current_time)
                         logger.warning(
                             '💳 Недостаточно средств для автопродления у пользователя',
-                            user_identifier=user_identifier,
+                            user_identifier=user_log_id,
                         )
                 except Exception as sub_error:
                     failed_count += 1

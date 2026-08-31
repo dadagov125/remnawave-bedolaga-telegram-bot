@@ -105,6 +105,7 @@ from app.utils.telegram_webapp import (
     parse_webapp_init_data,
 )
 from app.utils.timezone import format_local_datetime
+from app.utils.user_identity import user_identifier
 from app.utils.user_utils import (
     get_detailed_referral_list,
     get_effective_referral_commission_percent,
@@ -6747,7 +6748,7 @@ async def purchase_tariff_endpoint(
             'description': f'Продление тарифа {tariff.name} на {payload.period_days} дней',
         }
         await user_cart_service.save_user_cart(user.id, cart_data)
-        user_id_display = user.telegram_id or user.email or f'#{user.id}'
+        user_id_display = user_identifier(user)
         logger.info(
             'Корзина тарифа сохранена для автопродления (miniapp) пользователя', user_id_display=user_id_display
         )

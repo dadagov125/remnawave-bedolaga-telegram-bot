@@ -20,6 +20,7 @@ from app.keyboards.inline import (
 from app.localization.texts import get_texts
 from app.states import BalanceStates
 from app.utils.decorators import error_handler
+from app.utils.user_identity import user_identifier
 
 
 logger = structlog.get_logger(__name__)
@@ -482,7 +483,7 @@ async def request_support_topup(callback: types.CallbackQuery, db_user: User):
         )
         return
 
-    user_id_display = db_user.telegram_id or db_user.email or f'#{db_user.id}'
+    user_id_display = user_identifier(db_user)
     support_text = f"""
 🛠️ <b>Пополнение через поддержку</b>
 

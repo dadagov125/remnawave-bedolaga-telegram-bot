@@ -12,6 +12,7 @@ from app.config import settings
 from app.database.models import PaymentMethod, TransactionType
 from app.services.cloudpayments_service import CloudPaymentsAPIError
 from app.utils.payment_logger import payment_logger as logger
+from app.utils.user_identity import user_identifier
 from app.utils.user_utils import format_referrer_info
 
 
@@ -325,7 +326,7 @@ class CloudPaymentsPaymentMixin:
             description=payment.description or settings.CLOUDPAYMENTS_DESCRIPTION,
         )
 
-        user_id_display = user.telegram_id or user.email or f'#{user.id}'
+        user_id_display = user_identifier(user)
         logger.info(
             'CloudPayments платёж успешно обработан: invoice amount=₽, user',
             invoice_id=invoice_id,

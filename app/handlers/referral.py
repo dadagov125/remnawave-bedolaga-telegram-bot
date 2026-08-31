@@ -19,6 +19,7 @@ from app.services.admin_notification_service import AdminNotificationService, No
 from app.services.referral_withdrawal_service import referral_withdrawal_service
 from app.states import ReferralWithdrawalStates
 from app.utils.photo_message import edit_or_answer_photo
+from app.utils.user_identity import user_identifier
 from app.utils.user_utils import (
     get_detailed_referral_list,
     get_effective_referral_commission_percent,
@@ -825,7 +826,7 @@ async def confirm_withdrawal_request(callback: types.CallbackQuery, db_user: Use
     # Отправляем уведомление админам
     analysis = json.loads(request.risk_analysis) if request.risk_analysis else {}
 
-    user_id_display = html_escape(str(db_user.telegram_id or db_user.email or f'#{db_user.id}'))
+    user_id_display = html_escape(str(user_identifier(db_user)))
     safe_name = html_escape(db_user.full_name or 'Без имени')
     safe_details = html_escape(payment_details)
     admin_text = f"""

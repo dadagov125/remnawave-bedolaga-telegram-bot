@@ -29,6 +29,7 @@ from app.database.models import (
     UserStatus,
 )
 from app.utils.text_search import contains_conditions
+from app.utils.user_identity import user_identifier
 from app.utils.validators import sanitize_telegram_name
 
 
@@ -630,7 +631,7 @@ async def add_user_balance(
             await db.commit()
             await db.refresh(user)
 
-        user_id_display = user.telegram_id or user.email or f'#{user.id}'
+        user_id_display = user_identifier(user)
         logger.info(
             '💰 Баланс пользователя изменен: → (изменение: +)',
             user_id_display=user_id_display,
@@ -1334,7 +1335,7 @@ async def delete_user(db: AsyncSession, user: User) -> bool:
     user.updated_at = datetime.now(UTC)
 
     await db.commit()
-    user_id_display = user.telegram_id or user.email or f'#{user.id}'
+    user_id_display = user_identifier(user)
     logger.info('🗑️ Пользователь помечен как удаленный', user_id_display=user_id_display)
     return True
 

@@ -57,6 +57,7 @@ from app.utils.photo_message import safe_edit_or_resend
 from app.utils.subscription_utils import (
     resolve_hwid_device_limit_for_payload,
 )
+from app.utils.user_identity import user_identifier
 from app.utils.user_utils import get_effective_referral_commission_percent
 
 
@@ -848,7 +849,7 @@ async def _render_user_subscription_overview(
 
         if len(subs_list) > 1:
             user_link = user_html_link(user)
-            user_id_display = user.telegram_id or user.email or f'#{user.id}'
+            user_id_display = user_identifier(user)
             text = '📱 <b>Выберите подписку для управления</b>\n\n'
             text += f'👤 {user_link} (ID: <code>{user_id_display}</code>)\n\n'
             text += f'У пользователя <b>{len(subs_list)}</b> подписок:\n\n'
@@ -895,7 +896,7 @@ async def _render_user_subscription_overview(
 
     text = '📱 <b>Подписка и настройки пользователя</b>\n\n'
     user_link = user_html_link(user)
-    user_id_display = user.telegram_id or user.email or f'#{user.id}'
+    user_id_display = user_identifier(user)
     text += f'👤 {user_link} (ID: <code>{user_id_display}</code>)\n\n'
 
     keyboard = []
@@ -1083,7 +1084,7 @@ async def show_user_transactions(callback: types.CallbackQuery, db_user: User, d
 
     text = '💳 <b>Транзакции пользователя</b>\n\n'
     user_link = user_html_link(user)
-    user_id_display = user.telegram_id or user.email or f'#{user.id}'
+    user_id_display = user_identifier(user)
     text += f'👤 {user_link} (ID: <code>{user_id_display}</code>)\n'
     text += f'💰 Текущий баланс: {settings.format_price(user.balance_kopeks)}\n\n'
 
@@ -1210,7 +1211,7 @@ async def process_user_search(message: types.Message, db_user: User, state: FSMC
 
         button_text = f'{status_emoji} {subscription_emoji} {user.full_name}'
 
-        user_id_display = user.telegram_id or user.email or f'#{user.id}'
+        user_id_display = user_identifier(user)
         button_text += f' | 🆔 {user_id_display}'
 
         if user.balance_kopeks > 0:
@@ -1489,7 +1490,7 @@ async def _build_user_referrals_view(
                 referral_id_display = referral.telegram_id
             else:
                 referral_link = f'<b>{safe_name}</b>'
-                referral_id_display = referral.email or f'#{referral.id}'
+                referral_id_display = user_identifier(referral)
             items.append(
                 texts.t(
                     'ADMIN_USER_REFERRALS_LIST_ITEM',
@@ -2733,7 +2734,7 @@ async def show_inactive_users(callback: types.CallbackQuery, db_user: User, db: 
 
     for user in inactive_users[:10]:
         user_link = user_html_link(user)
-        user_id_display = user.telegram_id or user.email or f'#{user.id}'
+        user_id_display = user_identifier(user)
         has_active = any(s.is_active for s in (getattr(user, 'subscriptions', None) or []))
         sub_badge = ' 🛡️' if has_active else ''
         text += f'👤 {user_link}{sub_badge}\n'
@@ -2824,7 +2825,7 @@ async def show_user_statistics(callback: types.CallbackQuery, db_user: User, db:
 
     text = '📊 <b>Статистика пользователя</b>\n\n'
     user_link = user_html_link(user)
-    user_id_display = user.telegram_id or user.email or f'#{user.id}'
+    user_id_display = user_identifier(user)
     text += f'👤 {user_link} (ID: <code>{user_id_display}</code>)\n\n'
 
     text += '<b>Основная информация:</b>\n'
@@ -4873,7 +4874,7 @@ async def admin_buy_subscription(callback: types.CallbackQuery, db_user: User, d
 
     text = '💳 <b>Покупка подписки для пользователя</b>\n\n'
     target_user_link = user_html_link(target_user)
-    target_user_id_display = target_user.telegram_id or target_user.email or f'#{target_user.id}'
+    target_user_id_display = user_identifier(target_user)
     text += f'👤 {target_user_link} (ID: {target_user_id_display})\n'
     text += f'💰 Баланс пользователя: {settings.format_price(target_user.balance_kopeks)}\n\n'
     traffic_text = 'Безлимит' if (subscription.traffic_limit_gb or 0) <= 0 else f'{subscription.traffic_limit_gb} ГБ'
@@ -4964,7 +4965,7 @@ async def admin_buy_subscription_confirm(callback: types.CallbackQuery, db_user:
 
     text = '💳 <b>Подтверждение покупки подписки</b>\n\n'
     target_user_link = user_html_link(target_user)
-    target_user_id_display = target_user.telegram_id or target_user.email or f'#{target_user.id}'
+    target_user_id_display = user_identifier(target_user)
     text += f'👤 {target_user_link} (ID: {target_user_id_display})\n'
     text += f'📅 Период подписки: {period_days} дней\n'
     text += f'💰 Стоимость: {settings.format_price(price_kopeks)}\n'
@@ -5247,7 +5248,7 @@ async def admin_buy_subscription_execute(callback: types.CallbackQuery, db_user:
             message = '❌ Ошибка: у пользователя нет существующей подписки'
 
         target_user_link = user_html_link(target_user)
-        target_user_id_display = target_user.telegram_id or target_user.email or f'#{target_user.id}'
+        target_user_id_display = user_identifier(target_user)
         await callback.message.edit_text(
             f'{message}\n\n'
             f'👤 {target_user_link} (ID: {target_user_id_display})\n'
@@ -5280,7 +5281,7 @@ async def admin_buy_subscription_execute(callback: types.CallbackQuery, db_user:
                     parse_mode='HTML',
                 )
         except Exception as e:
-            user_id_display = target_user.telegram_id or target_user.email or f'#{target_user.id}'
+            user_id_display = user_identifier(target_user)
             logger.error('Ошибка отправки уведомления пользователю', user_id_display=user_id_display, error=e)
 
         await callback.answer()
@@ -5332,7 +5333,7 @@ async def admin_buy_tariff(callback: types.CallbackQuery, db_user: User, db: Asy
         return
 
     target_user_link = user_html_link(target_user)
-    target_user_id_display = target_user.telegram_id or target_user.email or f'#{target_user.id}'
+    target_user_id_display = user_identifier(target_user)
     text = '💳 <b>Покупка тарифа для пользователя</b>\n\n'
     text += f'👤 {target_user_link} (ID: {target_user_id_display})\n'
     text += f'💰 Баланс: {settings.format_price(target_user.balance_kopeks)}\n\n'
@@ -5388,7 +5389,7 @@ async def admin_buy_tariff_period(callback: types.CallbackQuery, db_user: User, 
         return
 
     target_user_link = user_html_link(target_user)
-    target_user_id_display = target_user.telegram_id or target_user.email or f'#{target_user.id}'
+    target_user_id_display = user_identifier(target_user)
     traffic = '♾️ Безлимит' if tariff.traffic_limit_gb == 0 else f'{tariff.traffic_limit_gb} ГБ'
 
     text = '💳 <b>Покупка тарифа для пользователя</b>\n\n'
@@ -5473,7 +5474,7 @@ async def admin_buy_tariff_confirm(callback: types.CallbackQuery, db_user: User,
         return
 
     target_user_link = user_html_link(target_user)
-    target_user_id_display = target_user.telegram_id or target_user.email or f'#{target_user.id}'
+    target_user_id_display = user_identifier(target_user)
     traffic = '♾️ Безлимит' if tariff.traffic_limit_gb == 0 else f'{tariff.traffic_limit_gb} ГБ'
 
     text = '💳 <b>Подтверждение покупки тарифа</b>\n\n'
@@ -5646,7 +5647,7 @@ async def admin_buy_tariff_execute(callback: types.CallbackQuery, db_user: User,
         )
 
         target_user_link = user_html_link(target_user)
-        target_user_id_display = target_user.telegram_id or target_user.email or f'#{target_user.id}'
+        target_user_id_display = user_identifier(target_user)
         traffic = '♾️ Безлимит' if tariff.traffic_limit_gb == 0 else f'{tariff.traffic_limit_gb} ГБ'
 
         await callback.message.edit_text(

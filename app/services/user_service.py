@@ -58,6 +58,7 @@ from app.services.notification_delivery_service import (
     NotificationType,
     notification_delivery_service,
 )
+from app.utils.user_identity import user_identifier
 
 
 logger = structlog.get_logger(__name__)
@@ -801,7 +802,7 @@ class UserService:
                 logger.warning('Пользователь не найден для удаления', user_id=user_id)
                 return result
 
-            user_id_display = user.telegram_id or user.email or f'#{user.id}'
+            user_id_display = user_identifier(user)
             logger.info('🗑️ Начинаем полное удаление пользователя', user_id=user_id, user_id_display=user_id_display)
 
             from app.config import settings

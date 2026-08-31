@@ -20,6 +20,7 @@ from app.database.models import (
 from app.localization.texts import Texts
 from app.utils.decorators import admin_required, error_handler
 from app.utils.formatters import format_datetime
+from app.utils.user_identity import user_identifier
 
 
 logger = structlog.get_logger(__name__)
@@ -135,11 +136,7 @@ async def show_subscriptions_list(callback: types.CallbackQuery, db_user: User, 
         text += f'📊 Всего: {total_count} | Страница: {page}/{total_pages}\n\n'
 
         for i, sub in enumerate(subscriptions, 1 + (page - 1) * 10):
-            user_info = (
-                (f'ID{sub.user.telegram_id}' if sub.user.telegram_id else sub.user.email or f'#{sub.user.id}')
-                if sub.user
-                else 'Неизвестно'
-            )
+            user_info = user_identifier(sub.user, telegram_prefix='ID') if sub.user else 'Неизвестно'
             sub_type = '🎁' if sub.is_trial else '💎'
             status = '✅ Активна' if sub.is_active else '❌ Неактивна'
 
@@ -193,11 +190,7 @@ async def show_expiring_subscriptions(callback: types.CallbackQuery, db_user: Us
 """
 
     for sub in expiring_3d[:5]:
-        user_info = (
-            (f'ID{sub.user.telegram_id}' if sub.user.telegram_id else sub.user.email or f'#{sub.user.id}')
-            if sub.user
-            else 'Неизвестно'
-        )
+        user_info = user_identifier(sub.user, telegram_prefix='ID') if sub.user else 'Неизвестно'
         sub_type = '🎁' if sub.is_trial else '💎'
         text += f'{sub_type} {user_info} - {format_datetime(sub.end_date)}\n'
 
@@ -206,11 +199,7 @@ async def show_expiring_subscriptions(callback: types.CallbackQuery, db_user: Us
 
     text += '\n<b>Истекают завтра:</b>\n'
     for sub in expiring_1d[:5]:
-        user_info = (
-            (f'ID{sub.user.telegram_id}' if sub.user.telegram_id else sub.user.email or f'#{sub.user.id}')
-            if sub.user
-            else 'Неизвестно'
-        )
+        user_info = user_identifier(sub.user, telegram_prefix='ID') if sub.user else 'Неизвестно'
         sub_type = '🎁' if sub.is_trial else '💎'
         text += f'{sub_type} {user_info} - {format_datetime(sub.end_date)}\n'
 
