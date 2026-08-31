@@ -486,6 +486,9 @@ class Settings(BaseSettings):
     SUBSCRIPTION_RENEWAL_BALANCE_THRESHOLD_KOPEKS: int = 20000
 
     MONITORING_INTERVAL: int = 60
+    # Ретрай зависших покупок с лендинга — свой цикл, а не общий часовой.
+    # Покупатель уже заплатил: если вебхук не довёл выдачу, ждать час нельзя.
+    GUEST_PURCHASE_RETRY_INTERVAL_SECONDS: int = 120
     # Жёсткий per-send таймаут (сек) на отправку уведомлений из MonitoringService.
     # Дефолтный session timeout aiogram = 60s; при медленном канале до Telegram
     # или недоступном получателе один send_photo/send_message блокирует ВЕСЬ хвост

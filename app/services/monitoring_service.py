@@ -204,6 +204,7 @@ class MonitoringService:
         self._notified_users: set[str] = set()
         self._last_cleanup = datetime.now(UTC)
         self._sla_task = None
+        self._guest_purchase_task = None
         # In-memory fallback состояния уведомлений об ошибке автоплатежа (на случай
         # недоступности Redis). Ключ — (subscription_id, cycle_token=int(end_date.timestamp())).
         self._autopay_fail_state: dict[tuple[int, int], dict] = {}
@@ -326,6 +327,14 @@ class MonitoringService:
         except Exception as e:
             logger.error('Не удалось запустить SLA-мониторинг', error=e)
 
+        # Выдача покупок с лендинга — свой быстрый цикл: покупатель уже заплатил,
+        # и если вебхук не довёл дело до подписки, ждать общий часовой круг нельзя.
+        try:
+            if not self._guest_purchase_task or self._guest_purchase_task.done():
+                self._guest_purchase_task = asyncio.create_task(self._guest_purchase_retry_loop())
+        except Exception as e:
+            logger.error('Не удалось запустить ретрай покупок с лендинга', error=e)
+
         while self.is_running:
             try:
                 await self._monitoring_cycle()
@@ -341,6 +350,11 @@ class MonitoringService:
         try:
             if self._sla_task and not self._sla_task.done():
                 self._sla_task.cancel()
+        except Exception:
+            pass
+        try:
+            if self._guest_purchase_task and not self._guest_purchase_task.done():
+                self._guest_purchase_task.cancel()
         except Exception:
             pass
 
@@ -396,7 +410,6 @@ class MonitoringService:
                 await self._check_expired_subscription_followups(db)
                 await self._check_traffic_warnings(db)
                 await self._check_low_balance_alerts(db)
-                await self._retry_stuck_guest_purchases(db)
                 await self._cleanup_expired_refresh_tokens(db)
                 await self._cleanup_button_click_logs(db)
                 await self._cleanup_inactive_users(db)
@@ -2384,7 +2397,7 @@ class MonitoringService:
 
         # Phase 2: Retry fulfillment for purchases in PAID status
         try:
-            retried = await retry_stuck_paid_purchases(db, stale_minutes=5, limit=10)
+            retried = await retry_stuck_paid_purchases(db, stale_minutes=2, limit=10)
             if retried:
                 logger.info('Retried stuck guest purchases', retried=retried)
         except Exception:
@@ -3031,6 +3044,30 @@ class MonitoringService:
                 )
         except Exception as e:
             logger.error('Ошибка проверки SLA тикетов', error=e)
+
+    async def _guest_purchase_retry_loop(self):
+        """Добивает покупки с лендинга, которые не доехали до подписки.
+
+        Отдельный цикл, а не часть общего: между оплатой и подпиской у человека
+        пустой экран, и цена задержки здесь — время ожидания уже заплатившего.
+        """
+        try:
+            interval_seconds = max(30, int(getattr(settings, 'GUEST_PURCHASE_RETRY_INTERVAL_SECONDS', 120)))
+        except Exception:
+            interval_seconds = 120
+        while self.is_running:
+            try:
+                async with AsyncSessionLocal() as db:
+                    try:
+                        await self._retry_stuck_guest_purchases(db)
+                    except Exception as e:
+                        logger.error('Ошибка ретрая покупок с лендинга', error=e)
+                        await db.rollback()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error('Ошибка в цикле ретрая покупок с лендинга', error=e)
+            await asyncio.sleep(interval_seconds)
 
     async def _sla_loop(self):
         try:

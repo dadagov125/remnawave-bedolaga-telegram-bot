@@ -1415,6 +1415,8 @@ async def create_user_by_phone(
     language: str = 'ru',
     referred_by_id: int | None = None,
     verified: bool = True,
+    commit: bool = True,
+    promo_group: PromoGroup | None = None,
 ) -> User:
     """Create a user registered by phone number (no Telegram, no email).
 
@@ -1423,10 +1425,21 @@ async def create_user_by_phone(
     состоялся. А при гостевой покупке на лендинге номер только введён в форму:
     владение им никто не доказывал, поэтому вызывающий передаёт
     ``verified=False``, и отметка ставится позже, при первом входе звонком.
+
+    ``commit=False`` — для вызывающего, который ведёт свою транзакцию (гостевая
+    покупка держит ``FOR UPDATE`` на строке покупки и создаёт пользователя
+    внутри SAVEPOINT'а). Коммит там закрыл бы и транзакцию, и SAVEPOINT, а
+    следующий же запрос упал бы с «closed transaction inside context manager».
+    В этом режиме событие ``user.created`` не отправляется: пользователя ещё
+    может не стать, если вызывающий откатится. Так же ведёт себя и гостевая
+    покупка по почте — она собирает ``User`` сама, без события.
+
+    ``promo_group`` — если тариф продаётся отдельной промогруппе, вызывающий
+    передаёт её сюда; иначе берём группу по умолчанию.
     """
     referral_code = await create_unique_referral_code(db)
     normalized_language = _normalize_language_code(language)
-    default_group = await _get_or_create_default_promo_group(db)
+    group = promo_group or await _get_or_create_default_promo_group(db)
 
     user = User(
         telegram_id=None,
@@ -1443,30 +1456,34 @@ async def create_user_by_phone(
         balance_kopeks=0,
         has_had_paid_subscription=False,
         has_made_first_topup=False,
-        promo_group_id=default_group.id,
+        promo_group_id=group.id,
     )
 
     db.add(user)
-    await db.commit()
-    await db.refresh(user)
-    user.promo_group = default_group
+    if commit:
+        await db.commit()
+        await db.refresh(user)
+    else:
+        await db.flush()
+    user.promo_group = group
 
-    logger.info('✅ Создан пользователь по номеру телефона', user_id=user.id)
+    logger.info('✅ Создан пользователь по номеру телефона', user_id=user.id, committed=commit)
 
-    try:
-        from app.services.event_emitter import event_emitter
+    if commit:
+        try:
+            from app.services.event_emitter import event_emitter
 
-        await event_emitter.emit(
-            'user.created',
-            {
-                'user_id': user.id,
-                'auth_type': 'phone',
-                'referral_code': user.referral_code,
-                'referred_by_id': user.referred_by_id,
-            },
-        )
-    except Exception as error:  # событие не должно ломать регистрацию
-        logger.warning('Не удалось отправить событие user.created', error=str(error))
+            await event_emitter.emit(
+                'user.created',
+                {
+                    'user_id': user.id,
+                    'auth_type': 'phone',
+                    'referral_code': user.referral_code,
+                    'referred_by_id': user.referred_by_id,
+                },
+            )
+        except Exception as error:  # событие не должно ломать регистрацию
+            logger.warning('Не удалось отправить событие user.created', error=str(error))
 
     return user
 

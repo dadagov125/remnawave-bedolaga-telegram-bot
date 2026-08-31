@@ -63,7 +63,10 @@ class PendingPayment:
     status: str
     is_paid: bool
     created_at: datetime
-    user: User
+    # Может быть None: покупку с лендинга оплачивает гость, у которого аккаунта
+    # ещё нет. Такие платежи всё равно показываем — иначе весь канал продаж с
+    # витрины пропадает из админки, включая брошенные и отменённые попытки.
+    user: User | None
     payment: Any
     expires_at: datetime | None = None
 
@@ -556,9 +559,6 @@ def _build_record(
     expires_at: datetime | None = None,
 ) -> PendingPayment | None:
     user = getattr(payment, 'user', None)
-    if user is None:
-        logger.debug('Skipping payment without linked user', method_value=method.value, identifier=identifier)
-        return None
 
     created_at = getattr(payment, 'created_at', None)
     if not isinstance(created_at, datetime):

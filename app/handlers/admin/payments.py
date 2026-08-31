@@ -330,7 +330,11 @@ def _build_detail_keyboard(
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def _format_user_line(user: User) -> str:
+def _format_user_line(user: User | None) -> str:
+    # Платёж с лендинга создаётся до регистрации покупателя: пока покупка не
+    # выдана, привязывать его не к кому. Такие показываем как гостевые.
+    if user is None:
+        return '👤 Гость (покупка с лендинга)'
     username = format_username(user.username, user.telegram_id, user.full_name)
     user_id_display = user.telegram_id or user.email or f'#{user.id}'
     return f'👤 {html.escape(username)} (<code>{user_id_display}</code>)'
@@ -809,7 +813,9 @@ async def export_payments(
                 'telegram_id': user.telegram_id,
                 'username': user.username,
                 'full_name': user.full_name,
-            },
+            }
+            if user
+            else None,
         }
 
         # Добавляем специфичные поля в зависимости от метода

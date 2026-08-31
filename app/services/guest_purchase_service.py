@@ -41,6 +41,7 @@ from app.database.models import (
     User,
     _aware,
 )
+from app.services.guest_payment_link import link_guest_payment_to_user
 from app.services.subscription_service import SubscriptionService
 
 
@@ -365,6 +366,29 @@ async def fulfill_purchase(
             tariff_id=purchase.tariff_id,
         )
 
+        # Платёж создавался ещё безымянным — гостя тогда не существовало. Теперь
+        # покупатель известен, привязываем: без этого платёж не виден ни в списке
+        # платежей админки, ни в карточке пользователя. Не критично для выдачи,
+        # поэтому ошибку глотаем и идём дальше.
+        # У подарка плательщик и получатель — разные люди, и платёж принадлежит
+        # плательщику; если он тоже гость и его аккаунта нет, привязывать не к кому.
+        payer_user_id = purchase.buyer_user_id if purchase.is_gift else user.id
+        if payer_user_id:
+            try:
+                await link_guest_payment_to_user(
+                    db,
+                    payment_method=purchase.payment_method,
+                    purchase_token=purchase.token,
+                    user_id=payer_user_id,
+                )
+            except Exception:
+                logger.warning(
+                    'Не удалось привязать платёж к покупателю',
+                    purchase_id=purchase.id,
+                    payment_method=purchase.payment_method,
+                    exc_info=True,
+                )
+
         # Load tariff early — needed for both PENDING_ACTIVATION and DELIVERED paths
         tariff = await get_tariff_by_id(db, purchase.tariff_id)
         if tariff is None:
@@ -679,6 +703,21 @@ def _mask_email(email: str) -> str:
     return f'{local}@{domain}.{tld}'
 
 
+async def _resolve_promo_group(db: AsyncSession, tariff_id: int | None):
+    """Промогруппа для нового покупателя с лендинга.
+
+    Если тариф продаётся отдельной группе — берём её, иначе группу по умолчанию.
+    Один хелпер на все каналы: раньше это умела только почтовая ветка, а
+    покупатель по телефону попадал в дефолтную группу и мог не увидеть в
+    кабинете тариф, который только что купил.
+    """
+    if tariff_id:
+        tariff_obj = await get_tariff_by_id(db, tariff_id)
+        if tariff_obj and tariff_obj.allowed_promo_groups:
+            return tariff_obj.allowed_promo_groups[0]
+    return await _get_or_create_default_promo_group(db)
+
+
 async def _find_or_create_user(
     db: AsyncSession,
     contact_type: Literal['email', 'telegram', 'phone'],
@@ -727,14 +766,7 @@ async def _find_or_create_user(
 
         # Create new email user with verified cabinet account
         plain_password = secrets.token_urlsafe(12)
-        # Resolve promo group: prefer tariff's allowed group, fallback to default
-        resolved_group = None
-        if tariff_id:
-            tariff_obj = await get_tariff_by_id(db, tariff_id)
-            if tariff_obj and tariff_obj.allowed_promo_groups:
-                resolved_group = tariff_obj.allowed_promo_groups[0]
-        if not resolved_group:
-            resolved_group = await _get_or_create_default_promo_group(db)
+        resolved_group = await _resolve_promo_group(db, tariff_id)
         referral_code = await create_unique_referral_code(db)
         user = User(
             auth_type='email',
@@ -797,8 +829,14 @@ async def _find_or_create_user(
             return user, False
 
         try:
+            # commit=False обязателен: мы внутри транзакции вызывающего, который
+            # держит FOR UPDATE на строке покупки. Коммит здесь закрыл бы и её,
+            # и SAVEPOINT — выдача падала с «closed transaction» (#InvalidRequestError).
+            promo_group = await _resolve_promo_group(db, tariff_id)
             async with db.begin_nested():
-                user = await create_user_by_phone(db, phone, verified=False)
+                user = await create_user_by_phone(
+                    db, phone, verified=False, commit=False, promo_group=promo_group
+                )
         except IntegrityError:
             # Гонка: тот же номер завели параллельно (например, вошли по звонку
             # во второй вкладке, пока шла оплата).
