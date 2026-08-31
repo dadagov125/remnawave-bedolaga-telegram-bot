@@ -194,18 +194,32 @@ class AdminNotificationService:
             return html.escape(username)
 
         telegram_id = getattr(user, 'telegram_id', None)
-        if telegram_id is None:
-            email = getattr(user, 'email', None)
-            if email:
-                return html.escape(email)
-            return f'User#{getattr(user, "id", "Unknown")}'
-        return f'ID{telegram_id}'
+        if telegram_id is not None:
+            return f'ID{telegram_id}'
+
+        # Регистрация звонком: ни имени, ни username, ни telegram_id, ни почты —
+        # у такого аккаунта есть только номер, и без него в уведомлении остаётся
+        # «User#46», по которому админ не опознает человека.
+        phone = getattr(user, 'phone', None)
+        if phone:
+            return html.escape(phone)
+
+        email = getattr(user, 'email', None)
+        if email:
+            return html.escape(email)
+        return f'User#{getattr(user, "id", "Unknown")}'
 
     def _get_user_identifier_display(self, user: User) -> str:
-        """Get user identifier for display in notifications (telegram_id or email)."""
+        """Идентификатор для уведомлений: telegram_id, телефон или почта."""
         telegram_id = getattr(user, 'telegram_id', None)
         if telegram_id:
             return f'<code>{telegram_id}</code>'
+
+        # В <code>, чтобы номер копировался одним тапом — админу он нужен
+        # именно чтобы позвонить или найти человека в поиске.
+        phone = getattr(user, 'phone', None)
+        if phone:
+            return f'📞 <code>{html.escape(phone)}</code>'
 
         email = getattr(user, 'email', None)
         if email:
@@ -214,12 +228,13 @@ class AdminNotificationService:
         return f'User#{getattr(user, "id", "Unknown")}'
 
     def _get_user_identifier_label(self, user: User) -> str:
-        """Get label for user identifier (Telegram ID or Email)."""
+        """Подпись к идентификатору: Telegram ID, Телефон или Email."""
         telegram_id = getattr(user, 'telegram_id', None)
         if telegram_id:
             return 'Telegram ID'
-        email = getattr(user, 'email', None)
-        if email:
+        if getattr(user, 'phone', None):
+            return 'Телефон'
+        if getattr(user, 'email', None):
             return 'Email'
         return 'ID'
 
