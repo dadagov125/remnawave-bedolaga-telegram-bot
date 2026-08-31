@@ -12,6 +12,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.cabinet.auth.flashcall import InvalidPhoneError, normalize_phone
 from app.cabinet.dependencies import get_cabinet_db
 from app.cabinet.ip_utils import get_client_ip
+from app.cabinet.utils.landing_placeholders import (
+    apply_landing_placeholders,
+    lowest_monthly_price_kopeks,
+)
 from app.cabinet.utils.locale import DEFAULT_LOCALE, resolve_locale_text
 from app.config import settings
 from app.database.crud.landing import get_active_landing_by_slug, get_purchase_by_token
@@ -695,28 +699,39 @@ async def get_landing_config(
             )
         )
 
-    # Resolve locale dicts to flat strings for the requested language
+    # Resolve locale dicts to flat strings for the requested language.
+    # Плейсхолдеры ({trial_period}, {price_from}) подставляются здесь, чтобы
+    # тексты витрины не расходились с настройками бота и ценами тарифов.
+    lowest_monthly = lowest_monthly_price_kopeks(tariffs)
+
+    def text_for(value, /) -> str | None:
+        return apply_landing_placeholders(
+            resolve_locale_text(value, lang),
+            lang=lang,
+            lowest_monthly_kopeks=lowest_monthly,
+        )
+
     features = [
         LandingFeature(
             icon=f.get('icon', ''),
-            title=resolve_locale_text(f.get('title'), lang),
-            description=resolve_locale_text(f.get('description'), lang),
+            title=text_for(f.get('title')) or '',
+            description=text_for(f.get('description')) or '',
         )
         for f in (landing.features or [])
     ]
 
     return LandingConfigResponse(
         slug=landing.slug,
-        title=resolve_locale_text(landing.title, lang),
-        subtitle=resolve_locale_text(landing.subtitle, lang) or None,
+        title=text_for(landing.title) or '',
+        subtitle=text_for(landing.subtitle) or None,
         features=features,
-        footer_text=resolve_locale_text(landing.footer_text, lang) or None,
+        footer_text=text_for(landing.footer_text) or None,
         tariffs=tariffs,
         payment_methods=payment_methods,
         gift_enabled=landing.gift_enabled,
         custom_css=landing.custom_css,
-        meta_title=resolve_locale_text(landing.meta_title, lang) or None,
-        meta_description=resolve_locale_text(landing.meta_description, lang) or None,
+        meta_title=text_for(landing.meta_title) or None,
+        meta_description=text_for(landing.meta_description) or None,
         discount=discount,
         background_config=landing.background_config,
         sticky_pay_button=landing.sticky_pay_button,
