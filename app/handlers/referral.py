@@ -99,24 +99,32 @@ async def show_referral_info(callback: types.CallbackQuery, db_user: User, db: A
     if settings.REFERRAL_INVITER_BONUS_KOPEKS > 0:
         referral_text += '\n' + texts.t(
             'REFERRAL_REWARD_INVITER',
-            '• Вы получаете при первом пополнении реферала: <b>{bonus}</b>',
-        ).format(bonus=texts.format_price(settings.REFERRAL_INVITER_BONUS_KOPEKS))
-
-    if settings.REFERRAL_MAX_COMMISSION_PAYMENTS > 0:
-        commission_line = texts.t(
-            'REFERRAL_REWARD_COMMISSION_LIMITED',
-            '• Комиссия с первых {max_payments} пополнений реферала: <b>{percent}%</b>',
+            '• Вы получаете за реферала, оплатившего от <b>{minimum}</b>: <b>{bonus}</b>',
         ).format(
-            percent=get_effective_referral_commission_percent(db_user),
-            max_payments=settings.REFERRAL_MAX_COMMISSION_PAYMENTS,
+            bonus=texts.format_price(settings.REFERRAL_INVITER_BONUS_KOPEKS),
+            minimum=texts.format_price(settings.REFERRAL_MINIMUM_TOPUP_KOPEKS),
         )
-    else:
-        commission_line = texts.t(
-            'REFERRAL_REWARD_COMMISSION',
-            '• Комиссия с каждого пополнения реферала: <b>{percent}%</b>',
-        ).format(percent=get_effective_referral_commission_percent(db_user))
 
-    referral_text += '\n' + commission_line + '\n\n'
+    # Комиссии может не быть вовсе (программа на разовых бонусах) — строка
+    # «Комиссия: 0%» в таком случае только сбивает с толку.
+    commission_percent = get_effective_referral_commission_percent(db_user)
+    if commission_percent > 0:
+        if settings.REFERRAL_MAX_COMMISSION_PAYMENTS > 0:
+            commission_line = texts.t(
+                'REFERRAL_REWARD_COMMISSION_LIMITED',
+                '• Комиссия с первых {max_payments} пополнений реферала: <b>{percent}%</b>',
+            ).format(
+                percent=commission_percent,
+                max_payments=settings.REFERRAL_MAX_COMMISSION_PAYMENTS,
+            )
+        else:
+            commission_line = texts.t(
+                'REFERRAL_REWARD_COMMISSION',
+                '• Комиссия с каждого пополнения реферала: <b>{percent}%</b>',
+            ).format(percent=commission_percent)
+        referral_text += '\n' + commission_line
+
+    referral_text += '\n\n'
 
     # Show bot link
     referral_text += (
